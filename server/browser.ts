@@ -105,7 +105,18 @@ export async function autoFillForm(
       try {
         await page.waitForSelector(field.selector, { timeout: 5000 });
 
-        if (field.type === "select") {
+        if (field.type === "checkbox") {
+          if (value === "true" || value === "1" || value === "on" || (field.options && field.options.includes(value))) {
+            const isChecked = await page.$eval(field.selector, (el: any) => el.checked);
+            if (!isChecked) {
+              await page.click(field.selector);
+            }
+          }
+        } else if (field.type === "radio") {
+          const radioSelector = `input[name="${field.name}"][value="${value}"]`;
+          await page.waitForSelector(radioSelector, { timeout: 5000 });
+          await page.click(radioSelector);
+        } else if (field.type === "select") {
           await page.select(field.selector, value);
         } else if (field.type === "textarea" || field.type === "text" || field.type === "email" || field.type === "tel") {
           await page.click(field.selector);

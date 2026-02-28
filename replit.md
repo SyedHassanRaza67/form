@@ -72,11 +72,27 @@ Full-stack SaaS application for automated proxy-based form filling.
 - Geo data extracted from agent form submissions and stored in submissions table (proxyHost, proxyPort, proxyLocation)
 - Helper functions: extractGeoTarget(), buildGeoProxyUsername() in server/routes.ts
 
+### Form Scraper (server/scraper.ts)
+- Selects the form with the MOST input fields (not first form) to avoid grabbing newsletter sidebars
+- Supports checkbox fields: each checkbox becomes its own field with unique name (e.g., `serviceType_roofing`)
+- Supports radio groups: grouped by name attribute, stored with options array
+- Handles duplicate name attributes (e.g., `name[]` checkboxes) with value-based suffixes
+- Improved label detection: `<label for>`, parent `<label>`, placeholder, aria-label, title, adjacent span/label
+- Fallback: if no value attr on radio/checkbox, uses id or index-based fallback
+
+### Agent Dashboard (client/src/pages/agent-dashboard.tsx)
+- Shows assigned sites as collapsed cards (site name + field count)
+- "View Form" toggle expands a card to show all form fields and submit button
+- Only one site expanded at a time (others collapse)
+- Supports checkbox and radio field rendering in addition to text/select/textarea
+- Geo-targeting badges and proxy preview shown inside expanded form
+
 ### Phases
 - Phase 1: Auto Form Scraper (COMPLETE)
 - Phase 2: Decodo Proxy Configuration (COMPLETE - polished UI with status badge, test results, geo preview)
 - Phase 3: Smart Proxy Geo-Targeting (COMPLETE - backend extraction, agent UI preview, submission tracking)
 - Phase 4: Headless Browser Auto-Fill (COMPLETE - Puppeteer + stealth, human-like typing 40-120ms, SSE progress, screenshot capture)
+- Phase 5: Scraper & Dashboard Improvements (COMPLETE - main form detection, checkbox/radio support, collapsible agent dashboard)
 
 ### Auto-Fill Engine (server/browser.ts)
 - Uses puppeteer-extra with stealth plugin to avoid bot detection

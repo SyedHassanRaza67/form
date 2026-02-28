@@ -8,13 +8,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import {
   Globe, Star, Send, Loader2, FileText, Clock, MapPin, Shield,
-  Monitor, Camera, CheckCircle2, XCircle, Timer
+  Monitor, Camera, CheckCircle2, XCircle, Timer, Eye, EyeOff
 } from "lucide-react";
 import type { FormField, Site, Submission } from "@shared/schema";
 
@@ -31,7 +32,7 @@ interface AutoFillProgress {
 export default function AgentDashboard() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
+  const [expandedSiteId, setExpandedSiteId] = useState<string | null>(null);
   const [formData, setFormData] = useState<Record<string, string>>({});
   const [activeSubmissionId, setActiveSubmissionId] = useState<string | null>(null);
   const [progressUpdates, setProgressUpdates] = useState<AutoFillProgress[]>([]);
@@ -93,10 +94,13 @@ export default function AgentDashboard() {
     }
   }, [progressUpdates]);
 
+  const sites = sitesQuery.data || [];
+  const expandedSite = sites.find((s) => s.id === expandedSiteId) || null;
+
   const submitMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/agent/submissions", {
-        siteId: selectedSite?.id,
+        siteId: expandedSite?.id,
         formData,
       });
       return res.json();
@@ -118,13 +122,11 @@ export default function AgentDashboard() {
     },
   });
 
-  const sites = sitesQuery.data || [];
-  const selectedSite = sites.find((s) => s.id === selectedSiteId) || sites[0];
-  const fields = (selectedSite?.fields as FormField[]) || [];
-
   const isZipField = (name: string) => ZIP_FIELDS.includes(name.toLowerCase());
   const isStateField = (name: string) => STATE_FIELDS.includes(name.toLowerCase());
   const isGeoField = (name: string) => isZipField(name) || isStateField(name);
+
+  const expandedFields = expandedSite ? ((expandedSite.fields as FormField[]) || []) : [];
 
   const geoPreview = useMemo(() => {
     for (const key of Object.keys(formData)) {
@@ -140,14 +142,25 @@ export default function AgentDashboard() {
     return null;
   }, [formData]);
 
-  const hasGeoFields = fields.some((f) => isGeoField(f.name));
+  const hasGeoFields = expandedFields.some((f) => isGeoField(f.name));
   const isRunning = activeSubmissionId && currentProgress && currentProgress.step !== "complete" && currentProgress.step !== "error";
+
+  const handleToggleSite = (siteId: string) => {
+    if (expandedSiteId === siteId) {
+      setExpandedSiteId(null);
+      setFormData({});
+    } else {
+      setExpandedSiteId(siteId);
+      setFormData({});
+    }
+  };
 
   if (sitesQuery.isLoading) {
     return (
       <div className="space-y-4 p-6" data-testid="agent-dashboard">
         <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-64 w-full" />
+        <Skeleton className="h-14 w-full" />
+        <Skeleton className="h-14 w-full" />
       </div>
     );
   }
@@ -171,144 +184,174 @@ export default function AgentDashboard() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Agent Dashboard</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          Fill and submit forms for your assigned sites
+          Select a site to fill and submit its form
         </p>
       </div>
 
-      {sites.length > 1 && (
-        <div className="space-y-2">
-          <Label>Select Site</Label>
-          <Select
-            value={selectedSite?.id || ""}
-            onValueChange={(v) => {
-              setSelectedSiteId(v);
-              setFormData({});
-            }}
-          >
-            <SelectTrigger className="max-w-md" data-testid="select-site">
-              <SelectValue placeholder="Choose a site" />
-            </SelectTrigger>
-            <SelectContent>
-              {sites.map((site) => (
-                <SelectItem key={site.id} value={site.id}>
-                  {site.name} - {site.url}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      )}
+      <div className="space-y-3">
+        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Assigned Sites</h3>
+        {sites.map((site) => {
+          const siteFields = (site.fields as FormField[]) || [];
+          const isExpanded = expandedSiteId === site.id;
 
-      {selectedSite && (
-        <Card>
-          <CardHeader className="pb-4">
-            <div className="flex items-center justify-between gap-1 flex-wrap">
-              <CardTitle className="text-base flex items-center gap-2">
-                <FileText className="w-4 h-4" />
-                {selectedSite.name}
-              </CardTitle>
-              <Badge variant="outline" className="font-mono text-xs">
-                {fields.length} fields
-              </Badge>
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">{selectedSite.url}</p>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {fields
-              .sort((a, b) => a.order - b.order)
-              .map((field) => (
-                <div key={field.name} className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <Label className="text-sm">
-                      {field.label || field.name}
-                      {field.required && <span className="text-destructive ml-1">*</span>}
-                    </Label>
-                    {isZipField(field.name) && (
-                      <Badge variant="default" className="text-xs gap-1" data-testid={`badge-geo-${field.name}`}>
-                        <Star className="w-3 h-3" />
-                        PROXY TRIGGER
-                      </Badge>
-                    )}
-                    {isStateField(field.name) && (
-                      <Badge variant="secondary" className="text-xs gap-1" data-testid={`badge-geo-${field.name}`}>
-                        <MapPin className="w-3 h-3" />
-                        GEO TRIGGER
-                      </Badge>
-                    )}
+          return (
+            <Card key={site.id} data-testid={`card-site-${site.id}`}>
+              <CardContent className="p-0">
+                <button
+                  className="w-full p-4 flex items-center justify-between gap-3 text-left hover:bg-muted/50 transition-colors rounded-t-lg"
+                  onClick={() => handleToggleSite(site.id)}
+                  data-testid={`button-toggle-site-${site.id}`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Globe className="w-5 h-5 text-primary shrink-0" />
+                    <div className="min-w-0">
+                      <p className="font-medium truncate">{site.name}</p>
+                      <p className="text-xs text-muted-foreground truncate">{siteFields.length} fields</p>
+                    </div>
                   </div>
-                  {field.type === "select" && field.options ? (
-                    <Select
-                      value={formData[field.name] || ""}
-                      onValueChange={(v) => setFormData({ ...formData, [field.name]: v })}
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Badge variant="outline" className="text-xs">
+                      {isExpanded ? <EyeOff className="w-3 h-3 mr-1" /> : <Eye className="w-3 h-3 mr-1" />}
+                      {isExpanded ? "Close" : "View Form"}
+                    </Badge>
+                  </div>
+                </button>
+
+                {isExpanded && (
+                  <div className="border-t px-4 pb-4 pt-4 space-y-4">
+                    <p className="text-xs text-muted-foreground">{site.url}</p>
+
+                    {siteFields
+                      .sort((a, b) => a.order - b.order)
+                      .map((field) => (
+                        <div key={field.name} className="space-y-2">
+                          <div className="flex items-center gap-2">
+                            <Label className="text-sm">
+                              {field.label || field.name}
+                              {field.required && <span className="text-destructive ml-1">*</span>}
+                            </Label>
+                            {isZipField(field.name) && (
+                              <Badge variant="default" className="text-xs gap-1" data-testid={`badge-geo-${field.name}`}>
+                                <Star className="w-3 h-3" />
+                                PROXY TRIGGER
+                              </Badge>
+                            )}
+                            {isStateField(field.name) && (
+                              <Badge variant="secondary" className="text-xs gap-1" data-testid={`badge-geo-${field.name}`}>
+                                <MapPin className="w-3 h-3" />
+                                GEO TRIGGER
+                              </Badge>
+                            )}
+                          </div>
+
+                          {field.type === "checkbox" ? (
+                            <div className="flex items-center gap-2">
+                              <Checkbox
+                                checked={formData[field.name] === (field.options?.[0] || "true")}
+                                onCheckedChange={(checked) =>
+                                  setFormData({
+                                    ...formData,
+                                    [field.name]: checked ? (field.options?.[0] || "true") : "",
+                                  })
+                                }
+                                data-testid={`checkbox-field-${field.name}`}
+                              />
+                              <span className="text-sm text-muted-foreground">{field.label || field.name}</span>
+                            </div>
+                          ) : field.type === "radio" && field.options ? (
+                            <div className="flex flex-wrap gap-3">
+                              {field.options.map((opt) => (
+                                <label key={opt} className="flex items-center gap-2 cursor-pointer">
+                                  <input
+                                    type="radio"
+                                    name={field.name}
+                                    value={opt}
+                                    checked={formData[field.name] === opt}
+                                    onChange={(e) => setFormData({ ...formData, [field.name]: e.target.value })}
+                                    className="accent-primary"
+                                    data-testid={`radio-field-${field.name}-${opt}`}
+                                  />
+                                  <span className="text-sm">{opt}</span>
+                                </label>
+                              ))}
+                            </div>
+                          ) : field.type === "select" && field.options ? (
+                            <Select
+                              value={formData[field.name] || ""}
+                              onValueChange={(v) => setFormData({ ...formData, [field.name]: v })}
+                            >
+                              <SelectTrigger data-testid={`select-field-${field.name}`}>
+                                <SelectValue placeholder={`Select ${field.label || field.name}`} />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {field.options.map((opt) => (
+                                  <SelectItem key={opt} value={opt}>{opt}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          ) : field.type === "textarea" ? (
+                            <textarea
+                              className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                              placeholder={field.label || field.name}
+                              value={formData[field.name] || ""}
+                              onChange={(e) => setFormData({ ...formData, [field.name]: e.target.value })}
+                              data-testid={`textarea-field-${field.name}`}
+                            />
+                          ) : (
+                            <Input
+                              type={field.type === "email" ? "email" : field.type === "tel" ? "tel" : "text"}
+                              placeholder={field.label || field.name}
+                              value={formData[field.name] || ""}
+                              onChange={(e) => setFormData({ ...formData, [field.name]: e.target.value })}
+                              data-testid={`input-field-${field.name}`}
+                            />
+                          )}
+                        </div>
+                      ))}
+
+                    {siteFields.some((f) => isGeoField(f.name)) && (
+                      <div className="rounded-md border border-primary/20 bg-primary/5 p-4 space-y-2" data-testid="proxy-preview-card">
+                        <div className="flex items-center gap-2">
+                          <Shield className="w-4 h-4 text-primary" />
+                          <p className="text-xs font-semibold uppercase tracking-wider text-primary">Proxy Preview</p>
+                        </div>
+                        {geoPreview ? (
+                          <div className="space-y-1">
+                            <p className="font-mono text-sm text-primary" data-testid="text-proxy-preview">
+                              username-{geoPreview.type}-{geoPreview.value}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Detected from <span className="font-mono">{geoPreview.field}</span> field ({geoPreview.type === "zip" ? "priority 1" : "priority 2 — fallback"})
+                            </p>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">
+                            Enter a zip code or state value to see the geo-targeted proxy username
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    <Button
+                      className="w-full mt-2"
+                      onClick={() => submitMutation.mutate()}
+                      disabled={submitMutation.isPending || !!isRunning}
+                      data-testid="button-submit-form"
                     >
-                      <SelectTrigger data-testid={`select-field-${field.name}`}>
-                        <SelectValue placeholder={`Select ${field.label || field.name}`} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {field.options.map((opt) => (
-                          <SelectItem key={opt} value={opt}>{opt}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  ) : field.type === "textarea" ? (
-                    <textarea
-                      className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                      placeholder={field.label || field.name}
-                      value={formData[field.name] || ""}
-                      onChange={(e) => setFormData({ ...formData, [field.name]: e.target.value })}
-                      data-testid={`textarea-field-${field.name}`}
-                    />
-                  ) : (
-                    <Input
-                      type={field.type === "email" ? "email" : field.type === "tel" ? "tel" : "text"}
-                      placeholder={field.label || field.name}
-                      value={formData[field.name] || ""}
-                      onChange={(e) => setFormData({ ...formData, [field.name]: e.target.value })}
-                      data-testid={`input-field-${field.name}`}
-                    />
-                  )}
-                </div>
-              ))}
-
-            {hasGeoFields && (
-              <div className="rounded-md border border-primary/20 bg-primary/5 p-4 space-y-2" data-testid="proxy-preview-card">
-                <div className="flex items-center gap-2">
-                  <Shield className="w-4 h-4 text-primary" />
-                  <p className="text-xs font-semibold uppercase tracking-wider text-primary">Proxy Preview</p>
-                </div>
-                {geoPreview ? (
-                  <div className="space-y-1">
-                    <p className="font-mono text-sm text-primary" data-testid="text-proxy-preview">
-                      username-{geoPreview.type}-{geoPreview.value}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Detected from <span className="font-mono">{geoPreview.field}</span> field ({geoPreview.type === "zip" ? "priority 1" : "priority 2 — fallback"})
-                    </p>
+                      {submitMutation.isPending || isRunning ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      ) : (
+                        <Send className="w-4 h-4 mr-2" />
+                      )}
+                      {isRunning ? "Auto-Fill Running..." : "Submit & Auto-Fill"}
+                    </Button>
                   </div>
-                ) : (
-                  <p className="text-xs text-muted-foreground">
-                    Enter a zip code or state value to see the geo-targeted proxy username
-                  </p>
                 )}
-              </div>
-            )}
-
-            <Button
-              className="w-full mt-4"
-              onClick={() => submitMutation.mutate()}
-              disabled={submitMutation.isPending || !!isRunning}
-              data-testid="button-submit-form"
-            >
-              {submitMutation.isPending || isRunning ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              ) : (
-                <Send className="w-4 h-4 mr-2" />
-              )}
-              {isRunning ? "Auto-Fill Running..." : "Submit & Auto-Fill"}
-            </Button>
-          </CardContent>
-        </Card>
-      )}
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
 
       {activeSubmissionId && progressUpdates.length > 0 && (
         <Card data-testid="card-autofill-progress">

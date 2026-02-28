@@ -4,8 +4,31 @@ import { storage } from "./storage";
 import { authMiddleware, generateToken, requireRole, type JwtPayload } from "./auth";
 import { scrapeFormFields } from "./scraper";
 import { loginSchema, registerSchema, proxyConfigSchema, createAgentSchema } from "@shared/schema";
+import { z } from "zod";
 import bcrypt from "bcryptjs";
 import axios from "axios";
+
+const ZIP_FIELD_NAMES = ["zip", "zipcode", "zip_code", "postal", "postalcode", "postal_code"];
+const STATE_FIELD_NAMES = ["state", "state_name"];
+
+function extractGeoTarget(formData: Record<string, string>): { type: "zip" | "state" | null; value: string } {
+  for (const key of Object.keys(formData)) {
+    if (ZIP_FIELD_NAMES.includes(key.toLowerCase()) && formData[key]?.trim()) {
+      return { type: "zip", value: formData[key].trim() };
+    }
+  }
+  for (const key of Object.keys(formData)) {
+    if (STATE_FIELD_NAMES.includes(key.toLowerCase()) && formData[key]?.trim()) {
+      return { type: "state", value: formData[key].trim().toLowerCase().replace(/\s+/g, "_") };
+    }
+  }
+  return { type: null, value: "" };
+}
+
+function buildGeoProxyUsername(baseUsername: string, geo: { type: "zip" | "state" | null; value: string }): string {
+  if (!geo.type) return baseUsername;
+  return `${baseUsername}-${geo.type}-${geo.value}`;
+}
 
 export async function registerRoutes(
   httpServer: Server,
@@ -321,15 +344,14 @@ export async function registerRoutes(
   app.post("/api/proxy/test", authMiddleware, requireRole("user"), async (req, res) => {
     try {
       const user = await storage.getUser(req.user!.userId);
-      if (!user || !user.proxyHost) {
-        return res.status(400).json({ message: "No proxy configured" });
+      if (!user || !user.proxyHost || !user.proxyPort) {
+        return res.status(400).json({ success: false, message: "No proxy configured. Save your proxy settings first." });
       }
 
-      const proxyUrl = `${user.proxyType}://${user.proxyUsername}:${user.proxyPassword}@${user.proxyHost}:${user.proxyPort}`;
       const response = await axios.get("https://api.ipify.org?format=json", {
         proxy: {
           host: user.proxyHost,
-          port: user.proxyPort || 8080,
+          port: user.proxyPort,
           auth: {
             username: user.proxyUsername || "",
             password: user.proxyPassword || "",
@@ -341,7 +363,7 @@ export async function registerRoutes(
 
       return res.json({ success: true, ip: response.data.ip });
     } catch (error: any) {
-      return res.status(500).json({ success: false, message: `Proxy test failed: ${error.message}` });
+      return res.status(400).json({ success: false, message: `Proxy test failed: ${error.message}` });
     }
   });
 
@@ -365,24 +387,55 @@ export async function registerRoutes(
 
   app.post("/api/agent/submissions", authMiddleware, requireRole("agent"), async (req, res) => {
     try {
-      const { siteId, formData } = req.body;
-      if (!siteId || !formData) {
-        return res.status(400).json({ message: "Site ID and form data required" });
+      const submissionPayload = z.object({
+        siteId: z.string().min(1),
+        formData: z.record(z.string(), z.string()),
+      }).safeParse(req.body);
+
+      if (!submissionPayload.success) {
+        return res.status(400).json({ message: "Invalid submission: site ID (string) and form data (object) required" });
       }
+
+      const { siteId, formData } = submissionPayload.data;
 
       const assignedSiteIds = await storage.getAgentSiteIds(req.user!.userId);
       if (!assignedSiteIds.includes(siteId)) {
         return res.status(403).json({ message: "Site not assigned to you" });
       }
 
+      const agent = await storage.getUser(req.user!.userId);
+      if (!agent) return res.status(404).json({ message: "Agent not found" });
+
+      let proxyHost: string | null = null;
+      let proxyPort: number | null = null;
+      let proxyLocation: string | null = null;
+      let geoUsername: string | null = null;
+
+      if (agent.parentUserId) {
+        const parentUser = await storage.getUser(agent.parentUserId);
+        if (parentUser && parentUser.proxyHost && parentUser.proxyPort && parentUser.proxyUsername && parentUser.proxyPassword) {
+          const geo = extractGeoTarget(formData);
+          geoUsername = buildGeoProxyUsername(parentUser.proxyUsername, geo);
+          proxyHost = parentUser.proxyHost;
+          proxyPort = parentUser.proxyPort;
+          proxyLocation = geo.type ? `${geo.type}-${geo.value}` : null;
+        }
+      }
+
       const submission = await storage.createSubmission({
         agentId: req.user!.userId,
         siteId,
         formData,
+        proxyHost,
+        proxyPort,
+        proxyLocation,
         status: "pending",
       });
 
-      return res.json(submission);
+      return res.json({
+        ...submission,
+        geoUsername,
+      });
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
     }

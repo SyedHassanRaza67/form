@@ -511,11 +511,14 @@ function ProxyTab() {
     proxyType: "http",
   });
   const [initialized, setInitialized] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; ip?: string; message?: string } | null>(null);
 
   if (proxyQuery.data && !initialized) {
     setConfig(proxyQuery.data);
     setInitialized(true);
   }
+
+  const isConfigured = config.proxyHost && config.proxyPort && config.proxyUsername;
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -536,6 +539,7 @@ function ProxyTab() {
       return res.json();
     },
     onSuccess: (data: any) => {
+      setTestResult(data);
       if (data.success) {
         toast({ title: "Proxy working!", description: `IP: ${data.ip}` });
       } else {
@@ -543,29 +547,30 @@ function ProxyTab() {
       }
     },
     onError: (err: any) => {
+      setTestResult({ success: false, message: err.message });
       toast({ title: "Test failed", description: err.message, variant: "destructive" });
     },
   });
 
-  const geoPreview = () => {
-    if (!config.proxyUsername) return "";
-    return `${config.proxyUsername}-zip-{ZIP_CODE} or ${config.proxyUsername}-state-{STATE}`;
-  };
-
   return (
     <div className="space-y-6">
-      <div>
-        <h3 className="text-lg font-semibold">Decodo Proxy Configuration</h3>
-        <p className="text-sm text-muted-foreground mt-1">Configure your proxy credentials for geo-targeted form submissions</p>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div>
+          <h3 className="text-lg font-semibold">Decodo Proxy Configuration</h3>
+          <p className="text-sm text-muted-foreground mt-1">Configure your proxy credentials for geo-targeted form submissions</p>
+        </div>
+        <Badge variant={isConfigured ? "default" : "secondary"} data-testid="badge-proxy-status">
+          {isConfigured ? "Configured" : "Not Configured"}
+        </Badge>
       </div>
 
       <Card>
-        <CardContent className="p-6 space-y-4">
+        <CardContent className="p-6 space-y-5">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Proxy Host</Label>
               <Input
-                placeholder="proxy.example.com"
+                placeholder="gate.decodo.com"
                 value={config.proxyHost}
                 onChange={(e) => setConfig({ ...config, proxyHost: e.target.value })}
                 data-testid="input-proxy-host"
@@ -575,7 +580,7 @@ function ProxyTab() {
               <Label>Port</Label>
               <Input
                 type="number"
-                placeholder="8080"
+                placeholder="7000"
                 value={config.proxyPort || ""}
                 onChange={(e) => setConfig({ ...config, proxyPort: parseInt(e.target.value) || 0 })}
                 data-testid="input-proxy-port"
@@ -584,7 +589,7 @@ function ProxyTab() {
             <div className="space-y-2">
               <Label>Username</Label>
               <Input
-                placeholder="proxy_user"
+                placeholder="sp_username"
                 value={config.proxyUsername}
                 onChange={(e) => setConfig({ ...config, proxyUsername: e.target.value })}
                 data-testid="input-proxy-username"
@@ -594,7 +599,7 @@ function ProxyTab() {
               <Label>Password</Label>
               <Input
                 type="password"
-                placeholder="proxy_pass"
+                placeholder="proxy_password"
                 value={config.proxyPassword}
                 onChange={(e) => setConfig({ ...config, proxyPassword: e.target.value })}
                 data-testid="input-proxy-password"
@@ -615,13 +620,6 @@ function ProxyTab() {
             </Select>
           </div>
 
-          {config.proxyUsername && (
-            <div className="rounded-md bg-muted p-4 space-y-2">
-              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Geo-Targeting Preview</p>
-              <p className="font-mono text-sm break-all">{geoPreview()}</p>
-            </div>
-          )}
-
           <div className="flex gap-3 flex-wrap">
             <Button
               onClick={() => saveMutation.mutate()}
@@ -641,8 +639,63 @@ function ProxyTab() {
               Test Connection
             </Button>
           </div>
+
+          {testResult && (
+            <div className={`rounded-md p-4 flex items-center gap-3 ${testResult.success ? "bg-emerald-500/10 border border-emerald-500/20" : "bg-destructive/10 border border-destructive/20"}`} data-testid="proxy-test-result">
+              {testResult.success ? (
+                <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
+              ) : (
+                <XCircle className="w-5 h-5 text-destructive shrink-0" />
+              )}
+              <div>
+                <p className="text-sm font-medium">
+                  {testResult.success ? "Connection Successful" : "Connection Failed"}
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5 font-mono">
+                  {testResult.success ? `External IP: ${testResult.ip}` : testResult.message}
+                </p>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
+
+      {config.proxyUsername && (
+        <Card>
+          <CardContent className="p-6 space-y-4">
+            <div className="flex items-center gap-2">
+              <Shield className="w-4 h-4 text-primary" />
+              <h4 className="text-sm font-semibold">Smart Geo-Targeting Preview</h4>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              When agents submit forms, the proxy username is automatically modified based on zip code or state fields to enable geo-targeted requests.
+            </p>
+            <div className="space-y-3">
+              <div className="rounded-md bg-muted p-3">
+                <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-1.5">Priority 1 - Zip Code</p>
+                <p className="text-xs text-muted-foreground mb-1">Fields detected: zip, zipcode, zip_code, postal, postalcode</p>
+                <p className="font-mono text-sm text-primary" data-testid="text-geo-zip-preview">
+                  {config.proxyUsername}-zip-90210
+                </p>
+              </div>
+              <div className="rounded-md bg-muted p-3">
+                <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-1.5">Priority 2 - State</p>
+                <p className="text-xs text-muted-foreground mb-1">Fields detected: state, state_name</p>
+                <p className="font-mono text-sm text-primary" data-testid="text-geo-state-preview">
+                  {config.proxyUsername}-state-california
+                </p>
+              </div>
+              <div className="rounded-md bg-muted p-3">
+                <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-1.5">No Geo Data</p>
+                <p className="text-xs text-muted-foreground mb-1">If no zip or state field is found</p>
+                <p className="font-mono text-sm" data-testid="text-geo-none-preview">
+                  {config.proxyUsername}
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

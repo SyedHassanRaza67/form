@@ -61,10 +61,17 @@ Full-stack SaaS application for automated proxy-based form filling.
 - Fonts: DM Sans (body), Space Mono (code/mono)
 - Primary color: Blue (#3b82f6 range)
 
+### Geo-Targeting Logic
+- Zip field names (priority 1): zip, zipcode, zip_code, postal, postalcode, postal_code
+- State field names (priority 2): state, state_name
+- Proxy username format: `{baseUsername}-zip-{value}` or `{baseUsername}-state-{value}`
+- Geo data extracted from agent form submissions and stored in submissions table (proxyHost, proxyPort, proxyLocation)
+- Helper functions: extractGeoTarget(), buildGeoProxyUsername() in server/routes.ts
+
 ### Phases
 - Phase 1: Auto Form Scraper (COMPLETE)
-- Phase 2: Decodo Proxy Configuration (COMPLETE - UI ready, backend ready)
-- Phase 3: Smart Proxy Geo-Targeting (planned)
+- Phase 2: Decodo Proxy Configuration (COMPLETE - polished UI with status badge, test results, geo preview)
+- Phase 3: Smart Proxy Geo-Targeting (COMPLETE - backend extraction, agent UI preview, submission tracking)
 - Phase 4: Headless Browser Auto-Fill with Puppeteer (planned)
 
 ### Environment Variables

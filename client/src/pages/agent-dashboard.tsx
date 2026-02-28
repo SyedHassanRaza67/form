@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -11,9 +11,12 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Globe, Star, Send, Loader2, FileText, Clock
+  Globe, Star, Send, Loader2, FileText, Clock, MapPin, Shield
 } from "lucide-react";
 import type { FormField, Site, Submission } from "@shared/schema";
+
+const ZIP_FIELDS = ["zip", "zipcode", "zip_code", "postal", "postalcode", "postal_code"];
+const STATE_FIELDS = ["state", "state_name"];
 
 export default function AgentDashboard() {
   const { user } = useAuth();
@@ -32,10 +35,13 @@ export default function AgentDashboard() {
       });
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/agent/submissions"] });
       setFormData({});
-      toast({ title: "Form submitted successfully" });
+      const locationMsg = data.proxyLocation
+        ? ` | Proxy: ${data.geoUsername || "N/A"}`
+        : "";
+      toast({ title: `Form submitted successfully${locationMsg}` });
     },
     onError: (err: any) => {
       toast({ title: "Submission failed", description: err.message, variant: "destructive" });
@@ -46,10 +52,25 @@ export default function AgentDashboard() {
   const selectedSite = sites.find((s) => s.id === selectedSiteId) || sites[0];
   const fields = (selectedSite?.fields as FormField[]) || [];
 
-  const isZipField = (name: string) => {
-    const lower = name.toLowerCase();
-    return ["zip", "zipcode", "zip_code", "postal", "postalcode", "postal_code"].includes(lower);
-  };
+  const isZipField = (name: string) => ZIP_FIELDS.includes(name.toLowerCase());
+  const isStateField = (name: string) => STATE_FIELDS.includes(name.toLowerCase());
+  const isGeoField = (name: string) => isZipField(name) || isStateField(name);
+
+  const geoPreview = useMemo(() => {
+    for (const key of Object.keys(formData)) {
+      if (isZipField(key) && formData[key]?.trim()) {
+        return { type: "zip" as const, value: formData[key].trim(), field: key };
+      }
+    }
+    for (const key of Object.keys(formData)) {
+      if (isStateField(key) && formData[key]?.trim()) {
+        return { type: "state" as const, value: formData[key].trim().toLowerCase().replace(/\s+/g, "_"), field: key };
+      }
+    }
+    return null;
+  }, [formData]);
+
+  const hasGeoFields = fields.some((f) => isGeoField(f.name));
 
   if (sitesQuery.isLoading) {
     return (
@@ -132,9 +153,15 @@ export default function AgentDashboard() {
                       {field.required && <span className="text-destructive ml-1">*</span>}
                     </Label>
                     {isZipField(field.name) && (
-                      <Badge variant="default" className="text-xs gap-1">
+                      <Badge variant="default" className="text-xs gap-1" data-testid={`badge-geo-${field.name}`}>
                         <Star className="w-3 h-3" />
                         PROXY TRIGGER
+                      </Badge>
+                    )}
+                    {isStateField(field.name) && (
+                      <Badge variant="secondary" className="text-xs gap-1" data-testid={`badge-geo-${field.name}`}>
+                        <MapPin className="w-3 h-3" />
+                        GEO TRIGGER
                       </Badge>
                     )}
                   </div>
@@ -172,6 +199,29 @@ export default function AgentDashboard() {
                 </div>
               ))}
 
+            {hasGeoFields && (
+              <div className="rounded-md border border-primary/20 bg-primary/5 p-4 space-y-2" data-testid="proxy-preview-card">
+                <div className="flex items-center gap-2">
+                  <Shield className="w-4 h-4 text-primary" />
+                  <p className="text-xs font-semibold uppercase tracking-wider text-primary">Proxy Preview</p>
+                </div>
+                {geoPreview ? (
+                  <div className="space-y-1">
+                    <p className="font-mono text-sm text-primary" data-testid="text-proxy-preview">
+                      username-{geoPreview.type}-{geoPreview.value}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Detected from <span className="font-mono">{geoPreview.field}</span> field ({geoPreview.type === "zip" ? "priority 1" : "priority 2 — fallback"})
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Enter a zip code or state value to see the geo-targeted proxy username
+                  </p>
+                )}
+              </div>
+            )}
+
             <Button
               className="w-full mt-4"
               onClick={() => submitMutation.mutate()}
@@ -202,9 +252,24 @@ export default function AgentDashboard() {
                       <p className="text-sm font-medium">
                         {sub.createdAt ? new Date(sub.createdAt).toLocaleString() : "Unknown"}
                       </p>
-                      <p className="text-xs text-muted-foreground">
-                        Duration: {sub.duration ? `${sub.duration}ms` : "N/A"}
-                      </p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        {sub.proxyLocation && (
+                          <span className="text-xs font-mono text-primary flex items-center gap-1" data-testid={`text-proxy-location-${sub.id}`}>
+                            <MapPin className="w-3 h-3" />
+                            {sub.proxyLocation}
+                          </span>
+                        )}
+                        {sub.proxyHost && (
+                          <span className="text-xs text-muted-foreground">
+                            via {sub.proxyHost}
+                          </span>
+                        )}
+                        {!sub.proxyLocation && (
+                          <span className="text-xs text-muted-foreground">
+                            Duration: {sub.duration ? `${sub.duration}ms` : "N/A"}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                   <Badge variant={sub.status === "success" ? "default" : sub.status === "failed" ? "destructive" : "secondary"}>

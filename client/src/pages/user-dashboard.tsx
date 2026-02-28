@@ -1,0 +1,685 @@
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Separator } from "@/components/ui/separator";
+import {
+  Globe, Search, Save, Trash2, Loader2, UserPlus, Network, Shield,
+  FileText, Users, Wifi, ChevronDown, ChevronUp, Eye, CheckCircle2, XCircle
+} from "lucide-react";
+import type { FormField, Site } from "@shared/schema";
+
+interface Agent {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  isActive: boolean;
+  assignedSiteIds: string[];
+}
+
+interface ProxyConfig {
+  proxyHost: string;
+  proxyPort: number;
+  proxyUsername: string;
+  proxyPassword: string;
+  proxyType: string;
+}
+
+function SitesTab() {
+  const { toast } = useToast();
+  const [url, setUrl] = useState("");
+  const [siteName, setSiteName] = useState("");
+  const [scrapedFields, setScrapedFields] = useState<FormField[] | null>(null);
+  const [formSelector, setFormSelector] = useState<string | null>(null);
+  const [submitSelector, setSubmitSelector] = useState<string | null>(null);
+  const [expandedSite, setExpandedSite] = useState<string | null>(null);
+
+  const sitesQuery = useQuery<Site[]>({ queryKey: ["/api/sites"] });
+
+  const scrapeMutation = useMutation({
+    mutationFn: async (targetUrl: string) => {
+      const res = await apiRequest("POST", "/api/sites/scrape", { url: targetUrl });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setScrapedFields(data.fields);
+      setFormSelector(data.formSelector);
+      setSubmitSelector(data.submitSelector);
+      toast({ title: `Found ${data.fields.length} form fields` });
+    },
+    onError: (err: any) => {
+      toast({ title: "Scrape failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/sites", {
+        name: siteName || new URL(url).hostname,
+        url,
+        formSelector,
+        submitSelector,
+        fields: scrapedFields,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/sites"] });
+      setUrl("");
+      setSiteName("");
+      setScrapedFields(null);
+      toast({ title: "Site saved successfully" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Save failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/sites/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/sites"] });
+      toast({ title: "Site deleted" });
+    },
+  });
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader className="pb-4">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Search className="w-4 h-4" />
+            Scrape Website Forms
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex gap-3 flex-wrap">
+            <div className="flex-1 min-w-[200px]">
+              <Input
+                placeholder="https://example.com/contact"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                data-testid="input-scrape-url"
+              />
+            </div>
+            <Button
+              onClick={() => scrapeMutation.mutate(url)}
+              disabled={!url || scrapeMutation.isPending}
+              data-testid="button-scrape"
+            >
+              {scrapeMutation.isPending ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Search className="w-4 h-4 mr-2" />
+              )}
+              Scrape
+            </Button>
+          </div>
+
+          {scrapedFields && (
+            <div className="space-y-4 pt-4">
+              <Separator />
+              <div className="flex items-center justify-between gap-1 flex-wrap">
+                <div>
+                  <h3 className="font-semibold text-sm">Detected Fields</h3>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {scrapedFields.length} field{scrapedFields.length !== 1 ? "s" : ""} found
+                  </p>
+                </div>
+                <Badge variant="secondary" className="font-mono text-xs">
+                  {formSelector || "No form detected"}
+                </Badge>
+              </div>
+
+              <div className="rounded-md border overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-12">#</TableHead>
+                      <TableHead>Label</TableHead>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Selector</TableHead>
+                      <TableHead className="text-center">Required</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {scrapedFields.map((f, i) => (
+                      <TableRow key={i} data-testid={`row-field-${i}`}>
+                        <TableCell className="font-mono text-muted-foreground">{f.order}</TableCell>
+                        <TableCell className="font-medium">{f.label || "-"}</TableCell>
+                        <TableCell className="font-mono text-sm">{f.name}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="font-mono text-xs">{f.type}</Badge>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs text-muted-foreground max-w-[200px] truncate">
+                          {f.selector}
+                        </TableCell>
+                        <TableCell className="text-center">
+                          {f.required ? (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-500 mx-auto" />
+                          ) : (
+                            <XCircle className="w-4 h-4 text-muted-foreground/40 mx-auto" />
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              <div className="flex gap-3 items-end flex-wrap">
+                <div className="flex-1 min-w-[200px]">
+                  <Label className="text-sm">Site Name</Label>
+                  <Input
+                    value={siteName}
+                    onChange={(e) => setSiteName(e.target.value)}
+                    placeholder="My Contact Form"
+                    className="mt-1"
+                    data-testid="input-site-name"
+                  />
+                </div>
+                <Button
+                  onClick={() => saveMutation.mutate()}
+                  disabled={saveMutation.isPending || scrapedFields.length === 0}
+                  data-testid="button-save-site"
+                >
+                  {saveMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Save className="w-4 h-4 mr-2" />
+                  )}
+                  Save Site
+                </Button>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <div>
+        <h3 className="text-lg font-semibold mb-3">Saved Sites</h3>
+        {sitesQuery.isLoading ? (
+          <div className="space-y-2">
+            {[1, 2, 3].map((i) => <Skeleton key={i} className="h-14 w-full" />)}
+          </div>
+        ) : sitesQuery.data?.length === 0 ? (
+          <Card>
+            <CardContent className="py-12 text-center text-muted-foreground">
+              <Globe className="w-10 h-10 mx-auto mb-3 opacity-40" />
+              <p className="font-medium">No sites yet</p>
+              <p className="text-sm mt-1">Paste a URL above and scrape to detect form fields</p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-2">
+            {sitesQuery.data?.map((site) => (
+              <Card key={site.id} className="hover-elevate" data-testid={`card-site-${site.id}`}>
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <Globe className="w-5 h-5 text-primary shrink-0" />
+                      <div className="min-w-0">
+                        <p className="font-medium truncate">{site.name}</p>
+                        <p className="text-xs text-muted-foreground truncate">{site.url}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="secondary" className="font-mono">
+                        {(site.fields as FormField[])?.length || 0} fields
+                      </Badge>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => setExpandedSite(expandedSite === site.id ? null : site.id)}
+                        data-testid={`button-expand-${site.id}`}
+                      >
+                        {expandedSite === site.id ? (
+                          <ChevronUp className="w-4 h-4" />
+                        ) : (
+                          <ChevronDown className="w-4 h-4" />
+                        )}
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => deleteMutation.mutate(site.id)}
+                        data-testid={`button-delete-site-${site.id}`}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                  {expandedSite === site.id && (
+                    <div className="mt-4 rounded-md border overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-12">#</TableHead>
+                            <TableHead>Label</TableHead>
+                            <TableHead>Name</TableHead>
+                            <TableHead>Type</TableHead>
+                            <TableHead className="text-center">Required</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {(site.fields as FormField[])?.map((f, i) => (
+                            <TableRow key={i}>
+                              <TableCell className="font-mono text-muted-foreground">{f.order}</TableCell>
+                              <TableCell>{f.label || "-"}</TableCell>
+                              <TableCell className="font-mono text-sm">{f.name}</TableCell>
+                              <TableCell>
+                                <Badge variant="outline" className="font-mono text-xs">{f.type}</Badge>
+                              </TableCell>
+                              <TableCell className="text-center">
+                                {f.required ? (
+                                  <CheckCircle2 className="w-4 h-4 text-emerald-500 mx-auto" />
+                                ) : (
+                                  <XCircle className="w-4 h-4 text-muted-foreground/40 mx-auto" />
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AgentsTab() {
+  const { toast } = useToast();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [newAgent, setNewAgent] = useState({ name: "", email: "", password: "", siteIds: [] as string[] });
+
+  const sitesQuery = useQuery<Site[]>({ queryKey: ["/api/sites"] });
+  const agentsQuery = useQuery<Agent[]>({ queryKey: ["/api/agents"] });
+
+  const createMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/agents", newAgent);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/agents"] });
+      setDialogOpen(false);
+      setNewAgent({ name: "", email: "", password: "", siteIds: [] });
+      toast({ title: "Agent created" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/agents/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/agents"] });
+      toast({ title: "Agent deleted" });
+    },
+  });
+
+  const toggleSite = (siteId: string) => {
+    setNewAgent((prev) => ({
+      ...prev,
+      siteIds: prev.siteIds.includes(siteId)
+        ? prev.siteIds.filter((s) => s !== siteId)
+        : [...prev.siteIds, siteId],
+    }));
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-1 flex-wrap">
+        <div>
+          <h3 className="text-lg font-semibold">Agent Accounts</h3>
+          <p className="text-sm text-muted-foreground mt-1">Create agents and assign them sites to fill forms</p>
+        </div>
+        <Button onClick={() => setDialogOpen(true)} data-testid="button-create-agent">
+          <UserPlus className="w-4 h-4 mr-2" />
+          Create Agent
+        </Button>
+      </div>
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create Agent Account</DialogTitle>
+          </DialogHeader>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              createMutation.mutate();
+            }}
+            className="space-y-4"
+          >
+            <div className="space-y-2">
+              <Label>Name</Label>
+              <Input
+                value={newAgent.name}
+                onChange={(e) => setNewAgent({ ...newAgent, name: e.target.value })}
+                required
+                data-testid="input-agent-name"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Email</Label>
+              <Input
+                type="email"
+                value={newAgent.email}
+                onChange={(e) => setNewAgent({ ...newAgent, email: e.target.value })}
+                required
+                data-testid="input-agent-email"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Password</Label>
+              <Input
+                type="password"
+                value={newAgent.password}
+                onChange={(e) => setNewAgent({ ...newAgent, password: e.target.value })}
+                required
+                minLength={6}
+                data-testid="input-agent-password"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Assign Sites</Label>
+              {sitesQuery.data?.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No sites available. Create sites first.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {sitesQuery.data?.map((site) => (
+                    <Badge
+                      key={site.id}
+                      variant={newAgent.siteIds.includes(site.id) ? "default" : "outline"}
+                      className="cursor-pointer"
+                      onClick={() => toggleSite(site.id)}
+                      data-testid={`badge-site-${site.id}`}
+                    >
+                      {site.name}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+            <Button type="submit" className="w-full" disabled={createMutation.isPending} data-testid="button-submit-create-agent">
+              {createMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Create Agent
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {agentsQuery.isLoading ? (
+        <div className="space-y-2">
+          {[1, 2].map((i) => <Skeleton key={i} className="h-14 w-full" />)}
+        </div>
+      ) : agentsQuery.data?.length === 0 ? (
+        <Card>
+          <CardContent className="py-12 text-center text-muted-foreground">
+            <Users className="w-10 h-10 mx-auto mb-3 opacity-40" />
+            <p className="font-medium">No agents yet</p>
+            <p className="text-sm mt-1">Create an agent and assign sites for form filling</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="rounded-md border overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Email</TableHead>
+                <TableHead>Assigned Sites</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {agentsQuery.data?.map((agent) => (
+                <TableRow key={agent.id} data-testid={`row-agent-${agent.id}`}>
+                  <TableCell className="font-medium">{agent.name}</TableCell>
+                  <TableCell className="text-muted-foreground text-sm">{agent.email}</TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap gap-1">
+                      {agent.assignedSiteIds.map((siteId) => {
+                        const site = sitesQuery.data?.find((s) => s.id === siteId);
+                        return (
+                          <Badge key={siteId} variant="secondary" className="text-xs">
+                            {site?.name || siteId.slice(0, 8)}
+                          </Badge>
+                        );
+                      })}
+                      {agent.assignedSiteIds.length === 0 && (
+                        <span className="text-sm text-muted-foreground">None</span>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={agent.isActive ? "default" : "destructive"}>
+                      {agent.isActive ? "Active" : "Disabled"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => deleteMutation.mutate(agent.id)}
+                      data-testid={`button-delete-agent-${agent.id}`}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProxyTab() {
+  const { toast } = useToast();
+
+  const proxyQuery = useQuery<ProxyConfig>({ queryKey: ["/api/proxy"] });
+
+  const [config, setConfig] = useState<ProxyConfig>({
+    proxyHost: "",
+    proxyPort: 0,
+    proxyUsername: "",
+    proxyPassword: "",
+    proxyType: "http",
+  });
+  const [initialized, setInitialized] = useState(false);
+
+  if (proxyQuery.data && !initialized) {
+    setConfig(proxyQuery.data);
+    setInitialized(true);
+  }
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("PUT", "/api/proxy", config);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/proxy"] });
+      toast({ title: "Proxy configuration saved" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Save failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const testMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/proxy/test");
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      if (data.success) {
+        toast({ title: "Proxy working!", description: `IP: ${data.ip}` });
+      } else {
+        toast({ title: "Proxy test failed", description: data.message, variant: "destructive" });
+      }
+    },
+    onError: (err: any) => {
+      toast({ title: "Test failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const geoPreview = () => {
+    if (!config.proxyUsername) return "";
+    return `${config.proxyUsername}-zip-{ZIP_CODE} or ${config.proxyUsername}-state-{STATE}`;
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="text-lg font-semibold">Decodo Proxy Configuration</h3>
+        <p className="text-sm text-muted-foreground mt-1">Configure your proxy credentials for geo-targeted form submissions</p>
+      </div>
+
+      <Card>
+        <CardContent className="p-6 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Proxy Host</Label>
+              <Input
+                placeholder="proxy.example.com"
+                value={config.proxyHost}
+                onChange={(e) => setConfig({ ...config, proxyHost: e.target.value })}
+                data-testid="input-proxy-host"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Port</Label>
+              <Input
+                type="number"
+                placeholder="8080"
+                value={config.proxyPort || ""}
+                onChange={(e) => setConfig({ ...config, proxyPort: parseInt(e.target.value) || 0 })}
+                data-testid="input-proxy-port"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Username</Label>
+              <Input
+                placeholder="proxy_user"
+                value={config.proxyUsername}
+                onChange={(e) => setConfig({ ...config, proxyUsername: e.target.value })}
+                data-testid="input-proxy-username"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Password</Label>
+              <Input
+                type="password"
+                placeholder="proxy_pass"
+                value={config.proxyPassword}
+                onChange={(e) => setConfig({ ...config, proxyPassword: e.target.value })}
+                data-testid="input-proxy-password"
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label>Protocol</Label>
+            <Select value={config.proxyType} onValueChange={(v) => setConfig({ ...config, proxyType: v })}>
+              <SelectTrigger data-testid="select-proxy-type">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="http">HTTP</SelectItem>
+                <SelectItem value="https">HTTPS</SelectItem>
+                <SelectItem value="socks5">SOCKS5</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {config.proxyUsername && (
+            <div className="rounded-md bg-muted p-4 space-y-2">
+              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Geo-Targeting Preview</p>
+              <p className="font-mono text-sm break-all">{geoPreview()}</p>
+            </div>
+          )}
+
+          <div className="flex gap-3 flex-wrap">
+            <Button
+              onClick={() => saveMutation.mutate()}
+              disabled={saveMutation.isPending}
+              data-testid="button-save-proxy"
+            >
+              {saveMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+              Save Configuration
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => testMutation.mutate()}
+              disabled={testMutation.isPending || !config.proxyHost}
+              data-testid="button-test-proxy"
+            >
+              {testMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Wifi className="w-4 h-4 mr-2" />}
+              Test Connection
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+export default function UserDashboard() {
+  return (
+    <div className="space-y-6" data-testid="user-dashboard">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
+        <p className="text-muted-foreground text-sm mt-1">Manage your sites, agents, and proxy settings</p>
+      </div>
+
+      <Tabs defaultValue="sites" className="w-full">
+        <TabsList className="grid w-full grid-cols-3 max-w-md">
+          <TabsTrigger value="sites" data-testid="tab-sites">
+            <FileText className="w-4 h-4 mr-2" />
+            Sites & Forms
+          </TabsTrigger>
+          <TabsTrigger value="agents" data-testid="tab-agents">
+            <Users className="w-4 h-4 mr-2" />
+            Agents
+          </TabsTrigger>
+          <TabsTrigger value="proxy" data-testid="tab-proxy">
+            <Network className="w-4 h-4 mr-2" />
+            Proxy
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="sites" className="mt-6">
+          <SitesTab />
+        </TabsContent>
+        <TabsContent value="agents" className="mt-6">
+          <AgentsTab />
+        </TabsContent>
+        <TabsContent value="proxy" className="mt-6">
+          <ProxyTab />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}

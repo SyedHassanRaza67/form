@@ -1,16 +1,394 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
+import { authMiddleware, generateToken, requireRole, type JwtPayload } from "./auth";
+import { scrapeFormFields } from "./scraper";
+import { loginSchema, registerSchema, proxyConfigSchema, createAgentSchema } from "@shared/schema";
+import bcrypt from "bcryptjs";
+import axios from "axios";
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  // put application routes here
-  // prefix all routes with /api
 
-  // use storage to perform CRUD operations on the storage interface
-  // e.g. storage.insertUser(user) or storage.getUserByUsername(username)
+  app.post("/api/auth/login", async (req, res) => {
+    try {
+      const parsed = loginSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid email or password format" });
+      }
+
+      const user = await storage.getUserByEmail(parsed.data.email);
+      if (!user) {
+        return res.status(401).json({ message: "Invalid credentials" });
+      }
+
+      if (!user.isActive) {
+        return res.status(403).json({ message: "Account is disabled" });
+      }
+
+      const valid = await bcrypt.compare(parsed.data.password, user.password);
+      if (!valid) {
+        return res.status(401).json({ message: "Invalid credentials" });
+      }
+
+      await storage.updateUser(user.id, { lastActive: new Date() });
+
+      const token = generateToken({ userId: user.id, email: user.email, role: user.role });
+      const { password, ...userWithoutPassword } = user;
+      return res.json({ token, user: userWithoutPassword });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/auth/register", async (req, res) => {
+    try {
+      const parsed = registerSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid registration data" });
+      }
+
+      const existing = await storage.getUserByEmail(parsed.data.email);
+      if (existing) {
+        return res.status(409).json({ message: "Email already registered" });
+      }
+
+      const user = await storage.createUser({
+        name: parsed.data.name,
+        email: parsed.data.email,
+        password: parsed.data.password,
+        role: "user",
+        isActive: true,
+      });
+
+      const token = generateToken({ userId: user.id, email: user.email, role: user.role });
+      const { password, ...userWithoutPassword } = user;
+      return res.json({ token, user: userWithoutPassword });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/auth/me", authMiddleware, async (req, res) => {
+    try {
+      const user = await storage.getUser(req.user!.userId);
+      if (!user) return res.status(404).json({ message: "User not found" });
+      const { password, ...userWithoutPassword } = user;
+      return res.json(userWithoutPassword);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/users", authMiddleware, requireRole("admin"), async (_req, res) => {
+    try {
+      const allUsers = await storage.getAllUsers();
+      const usersWithStats = await Promise.all(allUsers.map(async (u) => {
+        const userSites = await storage.getSitesByOwner(u.id);
+        const userSubmissions = await storage.getSubmissionsByAgent(u.id);
+        const { password, ...rest } = u;
+        return {
+          ...rest,
+          totalSites: userSites.length,
+          totalSubmissions: userSubmissions.length,
+        };
+      }));
+      return res.json(usersWithStats);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/admin/users/:id/toggle", authMiddleware, requireRole("admin"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.params.id);
+      if (!user) return res.status(404).json({ message: "User not found" });
+      const updated = await storage.updateUser(req.params.id, { isActive: !user.isActive });
+      return res.json(updated);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/admin/users/:id", authMiddleware, requireRole("admin"), async (req, res) => {
+    try {
+      await storage.deleteUser(req.params.id);
+      return res.json({ success: true });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/admin/users", authMiddleware, requireRole("admin"), async (req, res) => {
+    try {
+      const { name, email, password, role } = req.body;
+      if (!name || !email || !password) {
+        return res.status(400).json({ message: "Name, email, and password are required" });
+      }
+      const existing = await storage.getUserByEmail(email);
+      if (existing) return res.status(409).json({ message: "Email already exists" });
+
+      const user = await storage.createUser({ name, email, password, role: role || "user", isActive: true });
+      const { password: _, ...userWithoutPassword } = user;
+      return res.json(userWithoutPassword);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/admin/stats", authMiddleware, requireRole("admin"), async (_req, res) => {
+    try {
+      const allUsers = await storage.getAllUsers();
+      const totalSites = await storage.getTotalSiteCount();
+      const totalSubmissions = await storage.getSubmissionCount();
+      const activeUsers = allUsers.filter(u => u.isActive).length;
+
+      return res.json({
+        totalUsers: allUsers.length,
+        totalSites,
+        totalSubmissions,
+        activeUsers,
+      });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/sites/scrape", authMiddleware, requireRole("user"), async (req, res) => {
+    try {
+      const { url } = req.body;
+      if (!url) return res.status(400).json({ message: "URL is required" });
+
+      const result = await scrapeFormFields(url);
+      return res.json(result);
+    } catch (error: any) {
+      return res.status(500).json({ message: `Failed to scrape: ${error.message}` });
+    }
+  });
+
+  app.post("/api/sites", authMiddleware, requireRole("user"), async (req, res) => {
+    try {
+      const { name, url, formSelector, submitSelector, fields } = req.body;
+      if (!name || !url) return res.status(400).json({ message: "Name and URL required" });
+
+      const site = await storage.createSite({
+        ownerId: req.user!.userId,
+        name,
+        url,
+        formSelector,
+        submitSelector,
+        fields: fields || [],
+        isActive: true,
+      });
+      return res.json(site);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/sites", authMiddleware, requireRole("user"), async (req, res) => {
+    try {
+      const userSites = await storage.getSitesByOwner(req.user!.userId);
+      return res.json(userSites);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/sites/:id", authMiddleware, async (req, res) => {
+    try {
+      const site = await storage.getSite(req.params.id);
+      if (!site) return res.status(404).json({ message: "Site not found" });
+      if (site.ownerId !== req.user!.userId && req.user!.role !== "admin") {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      return res.json(site);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/sites/:id", authMiddleware, requireRole("user"), async (req, res) => {
+    try {
+      const site = await storage.getSite(req.params.id);
+      if (!site) return res.status(404).json({ message: "Site not found" });
+      if (site.ownerId !== req.user!.userId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      await storage.deleteSite(req.params.id);
+      return res.json({ success: true });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/agents", authMiddleware, requireRole("user"), async (req, res) => {
+    try {
+      const parsed = createAgentSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid agent data" });
+      }
+
+      const existing = await storage.getUserByEmail(parsed.data.email);
+      if (existing) return res.status(409).json({ message: "Email already exists" });
+
+      const agent = await storage.createUser({
+        name: parsed.data.name,
+        email: parsed.data.email,
+        password: parsed.data.password,
+        role: "agent",
+        isActive: true,
+        parentUserId: req.user!.userId,
+      });
+
+      for (const siteId of parsed.data.siteIds) {
+        await storage.assignSiteToAgent(agent.id, siteId);
+      }
+
+      const { password, ...agentWithoutPassword } = agent;
+      return res.json({ ...agentWithoutPassword, assignedSiteIds: parsed.data.siteIds });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/agents", authMiddleware, requireRole("user"), async (req, res) => {
+    try {
+      const agents = await storage.getAgentsByParent(req.user!.userId);
+      const agentsWithSites = await Promise.all(agents.map(async (a) => {
+        const siteIds = await storage.getAgentSiteIds(a.id);
+        const { password, ...rest } = a;
+        return { ...rest, assignedSiteIds: siteIds };
+      }));
+      return res.json(agentsWithSites);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/agents/:id", authMiddleware, requireRole("user"), async (req, res) => {
+    try {
+      const agent = await storage.getUser(req.params.id);
+      if (!agent || agent.parentUserId !== req.user!.userId) {
+        return res.status(404).json({ message: "Agent not found" });
+      }
+      await storage.deleteUser(req.params.id);
+      return res.json({ success: true });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.put("/api/proxy", authMiddleware, requireRole("user"), async (req, res) => {
+    try {
+      const parsed = proxyConfigSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid proxy configuration" });
+      }
+
+      const updated = await storage.updateUser(req.user!.userId, {
+        proxyHost: parsed.data.proxyHost,
+        proxyPort: parsed.data.proxyPort,
+        proxyUsername: parsed.data.proxyUsername,
+        proxyPassword: parsed.data.proxyPassword,
+        proxyType: parsed.data.proxyType,
+      });
+
+      return res.json({ success: true });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/proxy", authMiddleware, requireRole("user"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.user!.userId);
+      if (!user) return res.status(404).json({ message: "User not found" });
+      return res.json({
+        proxyHost: user.proxyHost || "",
+        proxyPort: user.proxyPort || 0,
+        proxyUsername: user.proxyUsername || "",
+        proxyPassword: user.proxyPassword || "",
+        proxyType: user.proxyType || "http",
+      });
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/proxy/test", authMiddleware, requireRole("user"), async (req, res) => {
+    try {
+      const user = await storage.getUser(req.user!.userId);
+      if (!user || !user.proxyHost) {
+        return res.status(400).json({ message: "No proxy configured" });
+      }
+
+      const proxyUrl = `${user.proxyType}://${user.proxyUsername}:${user.proxyPassword}@${user.proxyHost}:${user.proxyPort}`;
+      const response = await axios.get("https://api.ipify.org?format=json", {
+        proxy: {
+          host: user.proxyHost,
+          port: user.proxyPort || 8080,
+          auth: {
+            username: user.proxyUsername || "",
+            password: user.proxyPassword || "",
+          },
+          protocol: user.proxyType || "http",
+        },
+        timeout: 10000,
+      });
+
+      return res.json({ success: true, ip: response.data.ip });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: `Proxy test failed: ${error.message}` });
+    }
+  });
+
+  app.get("/api/agent/sites", authMiddleware, requireRole("agent"), async (req, res) => {
+    try {
+      const agentSites = await storage.getSitesForAgent(req.user!.userId);
+      return res.json(agentSites);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/agent/submissions", authMiddleware, requireRole("agent"), async (req, res) => {
+    try {
+      const subs = await storage.getSubmissionsByAgent(req.user!.userId);
+      return res.json(subs);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/agent/submissions", authMiddleware, requireRole("agent"), async (req, res) => {
+    try {
+      const { siteId, formData } = req.body;
+      if (!siteId || !formData) {
+        return res.status(400).json({ message: "Site ID and form data required" });
+      }
+
+      const assignedSiteIds = await storage.getAgentSiteIds(req.user!.userId);
+      if (!assignedSiteIds.includes(siteId)) {
+        return res.status(403).json({ message: "Site not assigned to you" });
+      }
+
+      const submission = await storage.createSubmission({
+        agentId: req.user!.userId,
+        siteId,
+        formData,
+        status: "pending",
+      });
+
+      return res.json(submission);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
+  await storage.ensureAdmin();
 
   return httpServer;
 }

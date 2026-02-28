@@ -37,3 +37,10 @@ author = "agent"
 task = "shell.exec"
 args = "npm run dev"
 waitForPort = 5000
+
+[userenv]
+
+[userenv.shared]
+JWT_SECRET = "proxyform_jwt_secret_2026_secure_key"
+ADMIN_EMAIL = "admin@proxyform.com"
+ADMIN_PASSWORD = "Admin@123"

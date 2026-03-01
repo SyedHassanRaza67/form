@@ -337,17 +337,25 @@ export default function AgentDashboard() {
                     )}
 
                     <Button
-                      className="w-full h-9 text-xs font-semibold"
+                      className="w-full h-9 text-xs font-semibold relative overflow-hidden"
                       onClick={() => submitMutation.mutate()}
                       disabled={submitMutation.isPending || !!isRunning}
                       data-testid="button-submit-form"
                     >
-                      {submitMutation.isPending || isRunning ? (
-                        <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />
-                      ) : (
-                        <Send className="w-3.5 h-3.5 mr-2" />
+                      {isRunning && (
+                        <div 
+                          className="absolute inset-0 bg-primary/20 transition-all duration-500 ease-out" 
+                          style={{ width: `${currentProgress?.percent || 0}%` }}
+                        />
                       )}
-                      {isRunning ? `Auto-Filling (${currentProgress?.percent || 0}%)` : "Submit & Auto-Fill"}
+                      <span className="relative z-10 flex items-center justify-center">
+                        {submitMutation.isPending || isRunning ? (
+                          <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />
+                        ) : (
+                          <Send className="w-3.5 h-3.5 mr-2" />
+                        )}
+                        {isRunning ? `Auto-Filling (${currentProgress?.percent || 0}%)` : "Submit & Auto-Fill"}
+                      </span>
                     </Button>
                   </div>
                 )}

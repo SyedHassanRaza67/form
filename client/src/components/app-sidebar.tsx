@@ -16,32 +16,36 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
-  Shield, LayoutDashboard, LogOut, PanelLeftClose, PanelLeft
+  Shield, LayoutDashboard, LogOut, PanelLeftClose, PanelLeft, Users, Globe, Network, FileText
 } from "lucide-react";
 import { useEffect } from "react";
 
 export function AppSidebar() {
   const { user, logout } = useAuth();
   const [location] = useLocation();
-  const { state, setOpen, setOpenMobile } = useSidebar();
+  const { state, setOpen, setOpenMobile, open } = useSidebar();
 
   useEffect(() => {
     // Hide sidebar by default on load
     setOpen(false);
-  }, [setOpen]);
+  }, []);
 
   if (!user) return null;
 
   const adminItems = [
     { title: "Dashboard", url: "/", icon: LayoutDashboard },
+    { title: "Users", url: "/admin/users", icon: Users },
   ];
 
   const userItems = [
     { title: "Dashboard", url: "/", icon: LayoutDashboard },
+    { title: "Sites", url: "/sites", icon: Globe },
+    { title: "Proxy", url: "/proxy", icon: Network },
   ];
 
   const agentItems = [
     { title: "Dashboard", url: "/", icon: LayoutDashboard },
+    { title: "Submissions", url: "/submissions", icon: FileText },
   ];
 
   const items = user.role === "admin" ? adminItems : user.role === "agent" ? agentItems : userItems;

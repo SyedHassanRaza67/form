@@ -79,8 +79,15 @@ export async function autoFillForm(
 
     onProgress({ step: "navigating", detail: `Navigating to ${url}`, percent: 15, timestamp: Date.now() });
 
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
-    await sleep(randomDelay(1000, 2000));
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await sleep(randomDelay(2000, 4000));
+
+    // Try to wait for network idle but don't fail if it takes too long
+    try {
+      await page.waitForNetworkIdle({ timeout: 5000 });
+    } catch (e) {
+      // ignore
+    }
 
     onProgress({ step: "page_loaded", detail: "Page loaded successfully", percent: 20, timestamp: Date.now() });
 

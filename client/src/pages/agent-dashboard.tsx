@@ -218,132 +218,136 @@ export default function AgentDashboard() {
                 </button>
 
                 {isExpanded && (
-                  <div className="border-t px-4 pb-4 pt-4 space-y-4">
-                    <p className="text-xs text-muted-foreground">{site.url}</p>
+                  <div className="border-t px-4 pb-4 pt-4 space-y-3 bg-muted/5">
+                    <p className="text-[10px] text-muted-foreground uppercase tracking-tight opacity-70 mb-1">{site.url}</p>
 
-                    {siteFields
-                      .sort((a, b) => a.order - b.order)
-                      .map((field) => (
-                        <div key={field.name} className="space-y-2">
-                          <div className="flex items-center gap-2">
-                            <Label className="text-sm">
-                              {field.label || field.name}
-                              {field.required && <span className="text-destructive ml-1">*</span>}
-                            </Label>
-                            {isZipField(field.name) && (
-                              <Badge variant="default" className="text-xs gap-1" data-testid={`badge-geo-${field.name}`}>
-                                <Star className="w-3 h-3" />
-                                PROXY TRIGGER
-                              </Badge>
-                            )}
-                            {isStateField(field.name) && (
-                              <Badge variant="secondary" className="text-xs gap-1" data-testid={`badge-geo-${field.name}`}>
-                                <MapPin className="w-3 h-3" />
-                                GEO TRIGGER
-                              </Badge>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-3 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
+                      {siteFields
+                        .sort((a, b) => a.order - b.order)
+                        .map((field) => (
+                          <div key={field.name} className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <Label className="text-[11px] font-medium">
+                                {field.label || field.name}
+                                {field.required && <span className="text-destructive ml-0.5">*</span>}
+                              </Label>
+                              {isZipField(field.name) && (
+                                <Badge variant="default" className="h-4 text-[9px] px-1 gap-0.5" data-testid={`badge-geo-${field.name}`}>
+                                  <Star className="w-2.5 h-2.5" />
+                                  PROXY
+                                </Badge>
+                              )}
+                              {isStateField(field.name) && (
+                                <Badge variant="secondary" className="h-4 text-[9px] px-1 gap-0.5" data-testid={`badge-geo-${field.name}`}>
+                                  <MapPin className="w-2.5 h-2.5" />
+                                  GEO
+                                </Badge>
+                              )}
+                            </div>
+
+                            {field.type === "checkbox" ? (
+                              <div className="flex items-center gap-2 py-1">
+                                <Checkbox
+                                  className="h-3.5 w-3.5"
+                                  checked={formData[field.name] === (field.options?.[0] || "true")}
+                                  onCheckedChange={(checked) =>
+                                    setFormData({
+                                      ...formData,
+                                      [field.name]: checked ? (field.options?.[0] || "true") : "",
+                                    })
+                                  }
+                                  data-testid={`checkbox-field-${field.name}`}
+                                />
+                                <span className="text-[11px] text-muted-foreground">{field.label || field.name}</span>
+                              </div>
+                            ) : field.type === "radio" && field.options ? (
+                              <div className="flex flex-wrap gap-x-3 gap-y-1 py-1">
+                                {field.options.map((opt) => (
+                                  <label key={opt} className="flex items-center gap-1.5 cursor-pointer">
+                                    <input
+                                      type="radio"
+                                      name={field.name}
+                                      value={opt}
+                                      checked={formData[field.name] === opt}
+                                      onChange={(e) => setFormData({ ...formData, [field.name]: e.target.value })}
+                                      className="h-3 w-3 accent-primary"
+                                      data-testid={`radio-field-${field.name}-${opt}`}
+                                    />
+                                    <span className="text-[11px]">{opt}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            ) : field.type === "select" && field.options ? (
+                              <Select
+                                value={formData[field.name] || ""}
+                                onValueChange={(v) => setFormData({ ...formData, [field.name]: v })}
+                              >
+                                <SelectTrigger className="h-8 text-[11px]" data-testid={`select-field-${field.name}`}>
+                                  <SelectValue placeholder={`Select ${field.label || field.name}`} />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {field.options.map((opt) => (
+                                    <SelectItem className="text-[11px]" key={opt} value={opt}>{opt}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            ) : field.type === "textarea" ? (
+                              <textarea
+                                className="flex min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-1.5 text-[11px] ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                placeholder={field.label || field.name}
+                                value={formData[field.name] || ""}
+                                onChange={(e) => setFormData({ ...formData, [field.name]: e.target.value })}
+                                data-testid={`textarea-field-${field.name}`}
+                              />
+                            ) : (
+                              <Input
+                                className="h-8 text-[11px]"
+                                type={field.type === "email" ? "email" : field.type === "tel" ? "tel" : "text"}
+                                placeholder={field.label || field.name}
+                                value={formData[field.name] || ""}
+                                onChange={(e) => setFormData({ ...formData, [field.name]: e.target.value })}
+                                data-testid={`input-field-${field.name}`}
+                              />
                             )}
                           </div>
-
-                          {field.type === "checkbox" ? (
-                            <div className="flex items-center gap-2">
-                              <Checkbox
-                                checked={formData[field.name] === (field.options?.[0] || "true")}
-                                onCheckedChange={(checked) =>
-                                  setFormData({
-                                    ...formData,
-                                    [field.name]: checked ? (field.options?.[0] || "true") : "",
-                                  })
-                                }
-                                data-testid={`checkbox-field-${field.name}`}
-                              />
-                              <span className="text-sm text-muted-foreground">{field.label || field.name}</span>
-                            </div>
-                          ) : field.type === "radio" && field.options ? (
-                            <div className="flex flex-wrap gap-3">
-                              {field.options.map((opt) => (
-                                <label key={opt} className="flex items-center gap-2 cursor-pointer">
-                                  <input
-                                    type="radio"
-                                    name={field.name}
-                                    value={opt}
-                                    checked={formData[field.name] === opt}
-                                    onChange={(e) => setFormData({ ...formData, [field.name]: e.target.value })}
-                                    className="accent-primary"
-                                    data-testid={`radio-field-${field.name}-${opt}`}
-                                  />
-                                  <span className="text-sm">{opt}</span>
-                                </label>
-                              ))}
-                            </div>
-                          ) : field.type === "select" && field.options ? (
-                            <Select
-                              value={formData[field.name] || ""}
-                              onValueChange={(v) => setFormData({ ...formData, [field.name]: v })}
-                            >
-                              <SelectTrigger data-testid={`select-field-${field.name}`}>
-                                <SelectValue placeholder={`Select ${field.label || field.name}`} />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {field.options.map((opt) => (
-                                  <SelectItem key={opt} value={opt}>{opt}</SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          ) : field.type === "textarea" ? (
-                            <textarea
-                              className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                              placeholder={field.label || field.name}
-                              value={formData[field.name] || ""}
-                              onChange={(e) => setFormData({ ...formData, [field.name]: e.target.value })}
-                              data-testid={`textarea-field-${field.name}`}
-                            />
-                          ) : (
-                            <Input
-                              type={field.type === "email" ? "email" : field.type === "tel" ? "tel" : "text"}
-                              placeholder={field.label || field.name}
-                              value={formData[field.name] || ""}
-                              onChange={(e) => setFormData({ ...formData, [field.name]: e.target.value })}
-                              data-testid={`input-field-${field.name}`}
-                            />
-                          )}
-                        </div>
-                      ))}
+                        ))}
+                    </div>
 
                     {siteFields.some((f) => isGeoField(f.name)) && (
-                      <div className="rounded-md border border-primary/20 bg-primary/5 p-4 space-y-2" data-testid="proxy-preview-card">
+                      <div className="rounded border border-primary/20 bg-primary/5 p-2 space-y-1" data-testid="proxy-preview-card">
                         <div className="flex items-center gap-2">
-                          <Shield className="w-4 h-4 text-primary" />
-                          <p className="text-xs font-semibold uppercase tracking-wider text-primary">Proxy Preview</p>
+                          <Shield className="w-3 h-3 text-primary" />
+                          <p className="text-[9px] font-bold uppercase tracking-widest text-primary">Geo-Targeting Preview</p>
                         </div>
                         {geoPreview ? (
-                          <div className="space-y-1">
-                            <p className="font-mono text-sm text-primary" data-testid="text-proxy-preview">
-                              username-{geoPreview.type}-{geoPreview.value}
+                          <div className="flex items-center justify-between gap-4">
+                            <p className="font-mono text-[11px] text-primary truncate" data-testid="text-proxy-preview">
+                              {user?.proxyUsername}-zip-{geoPreview.value}
                             </p>
-                            <p className="text-xs text-muted-foreground">
-                              Detected from <span className="font-mono">{geoPreview.field}</span> field ({geoPreview.type === "zip" ? "priority 1" : "priority 2 — fallback"})
+                            <p className="text-[10px] text-muted-foreground whitespace-nowrap">
+                              via <span className="font-mono">{geoPreview.field}</span>
                             </p>
                           </div>
                         ) : (
-                          <p className="text-xs text-muted-foreground">
-                            Enter a zip code or state value to see the geo-targeted proxy username
+                          <p className="text-[10px] text-muted-foreground italic">
+                            Enter a zip code or state value to activate geo-targeting
                           </p>
                         )}
                       </div>
                     )}
 
                     <Button
-                      className="w-full mt-2"
+                      className="w-full h-9 text-xs font-semibold"
                       onClick={() => submitMutation.mutate()}
                       disabled={submitMutation.isPending || !!isRunning}
                       data-testid="button-submit-form"
                     >
                       {submitMutation.isPending || isRunning ? (
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />
                       ) : (
-                        <Send className="w-4 h-4 mr-2" />
+                        <Send className="w-3.5 h-3.5 mr-2" />
                       )}
-                      {isRunning ? "Auto-Fill Running..." : "Submit & Auto-Fill"}
+                      {isRunning ? `Auto-Filling (${currentProgress?.percent || 0}%)` : "Submit & Auto-Fill"}
                     </Button>
                   </div>
                 )}
@@ -393,72 +397,80 @@ export default function AgentDashboard() {
       )}
 
       {submissionsQuery.data && submissionsQuery.data.length > 0 && (
-        <div>
-          <h3 className="text-lg font-semibold mb-3">Recent Submissions</h3>
-          <div className="space-y-2">
-            {submissionsQuery.data.slice(0, 10).map((sub) => (
-              <Card key={sub.id} className="hover-elevate" data-testid={`card-submission-${sub.id}`}>
-                <CardContent className="p-4 flex items-center justify-between gap-2 flex-wrap">
-                  <div className="flex items-center gap-3">
-                    <Clock className="w-4 h-4 text-muted-foreground" />
-                    <div>
-                      <p className="text-sm font-medium">
-                        {sub.createdAt ? new Date(sub.createdAt).toLocaleString() : "Unknown"}
-                      </p>
-                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                        {sub.proxyLocation && (
-                          <span className="text-xs font-mono text-primary flex items-center gap-1" data-testid={`text-proxy-location-${sub.id}`}>
+        <div className="mt-8">
+          <h3 className="text-sm font-semibold mb-3 text-muted-foreground uppercase tracking-wider">Recent Submissions</h3>
+          <div className="rounded-md border bg-card overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left border-collapse">
+                <thead>
+                  <tr className="bg-muted/50 border-b">
+                    <th className="p-2 font-medium border-r">Date & Time</th>
+                    <th className="p-2 font-medium border-r">Proxy Location</th>
+                    <th className="p-2 font-medium border-r">Host</th>
+                    <th className="p-2 font-medium border-r">Duration</th>
+                    <th className="p-2 font-medium border-r">Status</th>
+                    <th className="p-2 font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {submissionsQuery.data.slice(0, 15).map((sub) => (
+                    <tr key={sub.id} className="border-b hover:bg-muted/30 transition-colors" data-testid={`row-submission-${sub.id}`}>
+                      <td className="p-2 border-r whitespace-nowrap">
+                        {sub.createdAt ? new Date(sub.createdAt).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : "Unknown"}
+                      </td>
+                      <td className="p-2 border-r whitespace-nowrap">
+                        {sub.proxyLocation ? (
+                          <span className="flex items-center gap-1 text-primary font-mono" data-testid={`text-proxy-location-${sub.id}`}>
                             <MapPin className="w-3 h-3" />
                             {sub.proxyLocation}
                           </span>
-                        )}
-                        {sub.proxyHost && (
-                          <span className="text-xs text-muted-foreground">
-                            via {sub.proxyHost}
-                          </span>
-                        )}
-                        {sub.duration && (
-                          <span className="text-xs text-muted-foreground flex items-center gap-1">
+                        ) : "-"}
+                      </td>
+                      <td className="p-2 border-r whitespace-nowrap text-muted-foreground">
+                        {sub.proxyHost || "-"}
+                      </td>
+                      <td className="p-2 border-r whitespace-nowrap">
+                        {sub.duration ? (
+                          <span className="flex items-center gap-1">
                             <Timer className="w-3 h-3" />
                             {(sub.duration / 1000).toFixed(1)}s
                           </span>
+                        ) : "-"}
+                      </td>
+                      <td className="p-2 border-r whitespace-nowrap">
+                        <Badge variant={
+                          sub.status === "success" ? "default"
+                            : sub.status === "failed" ? "destructive"
+                            : "secondary"
+                        } className="px-1 py-0 h-5 text-[10px]">
+                          {sub.status === "running" && <Loader2 className="w-2.5 h-2.5 mr-1 animate-spin" />}
+                          {sub.status}
+                        </Badge>
+                      </td>
+                      <td className="p-2 whitespace-nowrap">
+                        {sub.screenshot && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-[10px]"
+                            onClick={() => setScreenshotUrl(sub.screenshot)}
+                            data-testid={`button-screenshot-${sub.id}`}
+                          >
+                            <Camera className="w-3 h-3 mr-1" />
+                            View
+                          </Button>
                         )}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {sub.screenshot && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 px-2"
-                        onClick={() => setScreenshotUrl(sub.screenshot)}
-                        data-testid={`button-screenshot-${sub.id}`}
-                      >
-                        <Camera className="w-3.5 h-3.5 mr-1" />
-                        Screenshot
-                      </Button>
-                    )}
-                    <Badge variant={
-                      sub.status === "success" ? "default"
-                        : sub.status === "failed" ? "destructive"
-                        : sub.status === "running" ? "secondary"
-                        : "secondary"
-                    }>
-                      {sub.status === "running" && <Loader2 className="w-3 h-3 mr-1 animate-spin" />}
-                      {sub.status}
-                    </Badge>
-                  </div>
-                </CardContent>
-                {sub.errorMessage && (
-                  <div className="px-4 pb-3">
-                    <p className="text-xs text-destructive bg-destructive/10 rounded p-2" data-testid={`text-error-${sub.id}`}>
-                      {sub.errorMessage}
-                    </p>
-                  </div>
-                )}
-              </Card>
-            ))}
+                        {sub.errorMessage && (
+                          <span className="ml-2 text-destructive cursor-help" title={sub.errorMessage}>
+                            <XCircle className="w-3 h-3 inline" />
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}

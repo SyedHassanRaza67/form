@@ -86,7 +86,7 @@ export async function autoFillForm(
 
     const sortedFields = [...fields].sort((a, b) => a.order - b.order);
     const totalFields = sortedFields.length;
-    const targetTotalTime = randomDelay(30000, 40000);
+    const targetTotalTime = randomDelay(30000, 35000);
     const baseFieldDelay = Math.floor(targetTotalTime / Math.max(totalFields, 1));
 
     for (let i = 0; i < sortedFields.length; i++) {

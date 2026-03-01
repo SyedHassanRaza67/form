@@ -11,16 +11,24 @@ import {
   SidebarMenuItem,
   SidebarFooter,
   SidebarHeader,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
-  Shield, LayoutDashboard, Users, Globe, Network, FileText, LogOut, Settings
+  Shield, LayoutDashboard, LogOut, PanelLeftClose, PanelLeft
 } from "lucide-react";
+import { useEffect } from "react";
 
 export function AppSidebar() {
   const { user, logout } = useAuth();
   const [location] = useLocation();
+  const { state, setOpen, setOpenMobile } = useSidebar();
+
+  useEffect(() => {
+    // Hide sidebar by default on load
+    setOpen(false);
+  }, [setOpen]);
 
   if (!user) return null;
 
@@ -39,17 +47,27 @@ export function AppSidebar() {
   const items = user.role === "admin" ? adminItems : user.role === "agent" ? agentItems : userItems;
 
   return (
-    <Sidebar>
-      <SidebarHeader className="p-4">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-md bg-primary flex items-center justify-center">
+    <Sidebar collapsible="icon">
+      <SidebarHeader className="p-4 flex flex-row items-center justify-between">
+        <div className="flex items-center gap-3 overflow-hidden">
+          <div className="w-9 h-9 rounded-md bg-primary flex items-center justify-center shrink-0">
             <Shield className="w-5 h-5 text-primary-foreground" />
           </div>
-          <div>
-            <h2 className="font-bold font-mono text-sm tracking-tight">ProxyForm</h2>
-            <p className="text-xs text-muted-foreground">v1.0</p>
-          </div>
+          {state === "expanded" && (
+            <div className="animate-in fade-in duration-300">
+              <h2 className="font-bold font-mono text-sm tracking-tight">ProxyForm</h2>
+              <p className="text-xs text-muted-foreground">v1.0</p>
+            </div>
+          )}
         </div>
+        <Button 
+          variant="ghost" 
+          size="icon" 
+          className="h-8 w-8 ml-auto" 
+          onClick={() => setOpen(!open)}
+        >
+          {state === "expanded" ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeft className="h-4 w-4" />}
+        </Button>
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>

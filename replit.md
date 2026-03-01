@@ -66,11 +66,21 @@ Full-stack SaaS application for automated proxy-based form filling.
 - Primary color: Blue (#3b82f6 range)
 
 ### Geo-Targeting Logic
-- Zip field names (priority 1): zip, zipcode, zip_code, postal, postalcode, postal_code
+- Zip field names (priority 1): zip, zipcode, zip_code, postal, postalcode, postal_code (also prefix-matched: zip-1, zip_code etc.)
 - State field names (priority 2): state, state_name
-- Proxy username format: `{baseUsername}-zip-{value}` or `{baseUsername}-state-{value}`
+- **Proxy URL Template**: User stores a full proxy URL with `{zip}` placeholder in the username, e.g. `http://user-name-zip-{zip}:pass@host:port`
+- On each submission, `{zip}` is replaced with the agent's zip code from the form
+- **Fallback (legacy)**: If `{zip}` is NOT in the username, appends `-zip-{value}` or `-state-{value}`
+- Proxy test substitutes `{zip}` → `00000` so connection test always works
 - Geo data extracted from agent form submissions and stored in submissions table (proxyHost, proxyPort, proxyLocation)
 - Helper functions: extractGeoTarget(), buildGeoProxyUsername() in server/routes.ts
+
+### Proxy UI (user-dashboard.tsx ProxyTab)
+- Single "Proxy URL Template" input field replaces 5 separate fields
+- Auto-parses the URL using regex to extract host/port/username/password/type
+- Shows green ✓ / red ✗ validity indicator as user types
+- Geo-targeting preview card shows full reconstructed URL with example zip substituted
+- `normalizeProxyHost()` strips protocol prefix and port from host field on save/test/submit
 
 ### Form Scraper (server/scraper.ts)
 - Selects the form with the MOST input fields (not first form) to avoid grabbing newsletter sidebars

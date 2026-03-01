@@ -70,6 +70,12 @@ function extractGeoTarget(formData: Record<string, string>): { type: "zip" | "st
 }
 
 function buildGeoProxyUsername(baseUsername: string, geo: { type: "zip" | "state" | null; value: string }): string {
+  if (baseUsername.includes("{zip}")) {
+    if (geo.type === "zip" && geo.value) {
+      return baseUsername.replace(/\{zip\}/g, geo.value);
+    }
+    return baseUsername;
+  }
   if (!geo.type) return baseUsername;
   return `${baseUsername}-${geo.type}-${geo.value}`;
 }
@@ -397,12 +403,13 @@ export async function registerRoutes(
         return res.status(400).json({ success: false, message: "No proxy configured. Save your proxy settings first." });
       }
 
+      const testUsername = (user.proxyUsername || "").replace(/\{zip\}/g, "00000");
       const response = await axios.get("https://api.ipify.org?format=json", {
         proxy: {
           host: normalizeProxyHost(user.proxyHost),
           port: user.proxyPort,
           auth: {
-            username: user.proxyUsername || "",
+            username: testUsername,
             password: user.proxyPassword || "",
           },
           protocol: user.proxyType || "http",

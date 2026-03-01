@@ -103,9 +103,40 @@ export async function autoFillForm(
       await page.authenticate({ username: proxy.username, password: proxy.password });
     }
 
-    onProgress({ step: "navigating", detail: `Navigating to ${url}`, percent: 10, timestamp: Date.now() });
-
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
+    // Navigate with automatic retry for transient proxy tunnel failures
+    const MAX_NAV_ATTEMPTS = 3;
+    let navAttempt = 0;
+    while (true) {
+      navAttempt++;
+      const attemptLabel = navAttempt > 1 ? ` (attempt ${navAttempt}/${MAX_NAV_ATTEMPTS})` : "";
+      onProgress({ step: "navigating", detail: `Navigating to ${url}${attemptLabel}`, percent: 10, timestamp: Date.now() });
+      try {
+        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+        break; // success — exit retry loop
+      } catch (navErr: any) {
+        const isRetryable =
+          navErr.message?.includes("ERR_TUNNEL_CONNECTION_FAILED") ||
+          navErr.message?.includes("ERR_PROXY_CONNECTION_FAILED") ||
+          navErr.message?.includes("ERR_CONNECTION_TIMED_OUT") ||
+          navErr.message?.includes("net::ERR_");
+        if (isRetryable && navAttempt < MAX_NAV_ATTEMPTS) {
+          const waitMs = 3000 * navAttempt;
+          onProgress({
+            step: "field_warning",
+            detail: `Proxy tunnel failed, retrying in ${waitMs / 1000}s... (${navAttempt}/${MAX_NAV_ATTEMPTS})`,
+            percent: 12,
+            timestamp: Date.now(),
+          });
+          await sleep(waitMs);
+          // Re-authenticate on the page before retrying
+          if (proxy && proxy.username && proxy.password) {
+            await page.authenticate({ username: proxy.username, password: proxy.password });
+          }
+          continue;
+        }
+        throw navErr; // max attempts reached or non-retryable error
+      }
+    }
     await sleep(randomDelay(2000, 3000));
 
     try {

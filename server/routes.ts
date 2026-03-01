@@ -383,13 +383,23 @@ export async function registerRoutes(
     try {
       const user = await storage.getUser(req.user!.userId);
       if (!user) return res.status(404).json({ message: "User not found" });
+
+      // Clean up stale proxySiteIds — remove IDs for sites that no longer exist
+      let proxySiteIds = user.proxySiteIds ?? null;
+      if (Array.isArray(proxySiteIds) && proxySiteIds.length > 0) {
+        const userSites = await storage.getSitesByOwner(req.user!.userId);
+        const validIds = new Set(userSites.map((s) => s.id));
+        const filtered = proxySiteIds.filter((id) => validIds.has(id));
+        proxySiteIds = filtered.length === 0 ? null : filtered;
+      }
+
       return res.json({
         proxyHost: user.proxyHost ? normalizeProxyHost(user.proxyHost) : "",
         proxyPort: user.proxyPort || 0,
         proxyUsername: user.proxyUsername || "",
         proxyPassword: user.proxyPassword || "",
         proxyType: user.proxyType || "http",
-        proxySiteIds: user.proxySiteIds ?? null,
+        proxySiteIds,
       });
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
@@ -403,7 +413,7 @@ export async function registerRoutes(
         return res.status(400).json({ success: false, message: "No proxy configured. Save your proxy settings first." });
       }
 
-      const testUsername = (user.proxyUsername || "").replace(/\{zip\}/g, "00000");
+      const testUsername = (user.proxyUsername || "").replace(/\{zip\}/g, "90210");
       const response = await axios.get("https://api.ipify.org?format=json", {
         proxy: {
           host: normalizeProxyHost(user.proxyHost),
@@ -496,9 +506,18 @@ export async function registerRoutes(
         const parentUser = await storage.getUser(agent.parentUserId);
         if (parentUser && parentUser.proxyHost && parentUser.proxyPort && parentUser.proxyUsername && parentUser.proxyPassword) {
           // Check proxy site assignment: null = all sites, array = specific sites
+          // If all stored site IDs are stale (sites deleted/recreated), treat as "apply to all"
+          let effectiveSiteIds = parentUser.proxySiteIds;
+          if (Array.isArray(parentUser.proxySiteIds) && parentUser.proxySiteIds.length > 0) {
+            const parentSites = await storage.getSitesByOwner(agent.parentUserId);
+            const validIds = new Set(parentSites.map((s) => s.id));
+            const stillValid = parentUser.proxySiteIds.filter((id) => validIds.has(id));
+            effectiveSiteIds = stillValid.length === 0 ? null : stillValid;
+          }
+
           const proxyAppliesToSite =
-            parentUser.proxySiteIds === null ||
-            (Array.isArray(parentUser.proxySiteIds) && parentUser.proxySiteIds.includes(siteId));
+            effectiveSiteIds === null ||
+            (Array.isArray(effectiveSiteIds) && effectiveSiteIds.includes(siteId));
 
           if (proxyAppliesToSite) {
             const geo = extractGeoTarget(formData);

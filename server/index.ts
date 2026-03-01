@@ -2,6 +2,21 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { existsSync } from "fs";
+import { execSync } from "child_process";
+import puppeteer from "puppeteer";
+
+// Ensure Chrome is installed before starting — it gets wiped on container restarts
+try {
+  const chromePath = puppeteer.executablePath();
+  if (!existsSync(chromePath)) {
+    console.log("[startup] Chrome not found, installing via puppeteer...");
+    execSync("node node_modules/puppeteer/install.mjs", { stdio: "inherit" });
+    console.log("[startup] Chrome installed successfully.");
+  }
+} catch (err: any) {
+  console.warn("[startup] Chrome install check failed:", err.message);
+}
 
 const app = express();
 const httpServer = createServer(app);

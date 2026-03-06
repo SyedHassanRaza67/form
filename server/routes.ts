@@ -157,6 +157,23 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
+  app.get("/api/health", async (_req, res) => {
+    try {
+      const dbStatus = await pool.connect().then(c => { c.release(); return "connected"; }).catch(e => `error: ${e.message}`);
+      res.json({
+        status: "ok",
+        database: dbStatus,
+        time: new Date().toISOString(),
+        env: {
+          node: process.env.NODE_ENV,
+          vercel: process.env.VERCEL || "false"
+        }
+      });
+    } catch (err: any) {
+      res.status(500).json({ status: "error", message: err.message });
+    }
+  });
+
   app.post("/api/auth/login", async (req, res) => {
     try {
       const parsed = loginSchema.safeParse(req.body);
@@ -164,7 +181,9 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Invalid email or password format" });
       }
 
+      console.log(`[auth] Attempting login for email: ${parsed.data.email}`);
       const user = await storage.getUserByEmail(parsed.data.email);
+      console.log(`[auth] User lookup result: ${user ? "Found" : "Not Found"}`);
       if (!user) {
         return res.status(401).json({ message: "Invalid credentials" });
       }
@@ -781,7 +800,12 @@ export async function registerRoutes(
     }
   });
 
-  await storage.ensureAdmin();
+  try {
+    await storage.ensureAdmin();
+    console.log("[init] Admin check completed.");
+  } catch (err: any) {
+    console.warn("[init] Admin creation failed (this might be normal if DB is not ready):", err.message);
+  }
 
   return httpServer;
 }

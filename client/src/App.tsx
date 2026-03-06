@@ -11,8 +11,9 @@ import NotFound from "@/pages/not-found";
 import LoginPage from "@/pages/login";
 import RegisterPage from "@/pages/register";
 import AdminDashboard from "@/pages/admin-dashboard";
-import UserDashboard, { SitesTab, ProxyTab } from "@/pages/user-dashboard";
+import UserDashboard, { SitesTab, ProxyTab, SubmissionsPage } from "@/pages/user-dashboard";
 import AgentDashboard from "@/pages/agent-dashboard";
+import InstructionsPage from "@/pages/instructions";
 
 function SitesPage() {
   return (
@@ -90,6 +91,8 @@ function AuthenticatedLayout() {
                 <Route path="/" component={DashboardRouter} />
                 <Route path="/sites" component={SitesPage} />
                 <Route path="/proxy" component={ProxyPage} />
+                <Route path="/submissions" component={SubmissionsPage} />
+                <Route path="/instructions" component={InstructionsPage} />
                 <Route component={NotFound} />
               </Switch>
             </div>

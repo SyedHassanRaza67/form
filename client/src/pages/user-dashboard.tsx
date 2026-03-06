@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,9 +16,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import {
   Globe, Search, Save, Trash2, Loader2, UserPlus, Network, Shield,
-  FileText, Users, Wifi, ChevronDown, ChevronUp, Eye, CheckCircle2, XCircle
+  FileText, Users, Wifi, ChevronDown, ChevronUp, Eye, CheckCircle2, XCircle, Monitor
 } from "lucide-react";
 import type { FormField, Site } from "@shared/schema";
+import { SiteForm } from "@/components/site-form";
 
 interface Agent {
   id: string;
@@ -34,6 +36,8 @@ interface ProxyConfig {
   proxyUsername: string;
   proxyPassword: string;
   proxyType: string;
+  proxyStateUsername: string;
+  proxyCountyUsername: string;
   proxySiteIds: string[] | null;
 }
 
@@ -45,6 +49,10 @@ export function SitesTab() {
   const [formSelector, setFormSelector] = useState<string | null>(null);
   const [submitSelector, setSubmitSelector] = useState<string | null>(null);
   const [expandedSite, setExpandedSite] = useState<string | null>(null);
+  const [previewSite, setPreviewSite] = useState<Site | null>(null);
+  const [previewData, setPreviewData] = useState<Record<string, string>>({});
+  // geoRoleEdits: siteId -> { fieldName -> geoRole }
+  const [geoRoleEdits, setGeoRoleEdits] = useState<Record<string, Record<string, "zip" | "state" | "county" | null>>>({});
 
   const sitesQuery = useQuery<Site[]>({ queryKey: ["/api/sites"] });
 
@@ -94,6 +102,65 @@ export function SitesTab() {
       toast({ title: "Site deleted" });
     },
   });
+
+  const updateFieldRolesMutation = useMutation({
+    mutationFn: async ({ siteId, fields }: { siteId: string; fields: FormField[] }) => {
+      await apiRequest("PUT", `/api/sites/${siteId}`, { fields });
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/sites"] });
+      // Clear local edits so the UI reflects the saved DB state
+      setGeoRoleEdits((prev) => {
+        const next = { ...prev };
+        delete next[variables.siteId];
+        return next;
+      });
+      toast({ title: "Geo roles saved" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Save failed", description: String(err?.message || err), variant: "destructive" });
+    },
+  });
+
+  const handleGeoRoleChange = (site: Site, fieldName: string, role: "zip" | "state" | "county" | null) => {
+    const siteId = site.id;
+    setGeoRoleEdits((prev) => {
+      const current = { ...(prev[siteId] || {}) };
+
+      if (role === "zip" || role === "state" || role === "county") {
+        // Clear any OTHER field that currently holds this same role (from local edits)
+        for (const k of Object.keys(current)) {
+          if (current[k] === role && k !== fieldName) delete current[k];
+        }
+        // Also clear from DB-level roles by explicitly overriding conflicting fields
+        for (const f of (site.fields as FormField[])) {
+          if (f.geoRole === role && f.name !== fieldName && !(f.name in current)) {
+            current[f.name] = null;
+          }
+        }
+      }
+
+      current[fieldName] = role;
+      return { ...prev, [siteId]: current };
+    });
+  };
+
+  const handleSaveGeoRoles = (site: Site) => {
+    const edits = geoRoleEdits[site.id] || {};
+    const updatedFields = (site.fields as FormField[]).map((f) => ({
+      ...f,
+      geoRole: f.name in edits ? edits[f.name] : (f.geoRole ?? null),
+    }));
+    updateFieldRolesMutation.mutate({ siteId: site.id, fields: updatedFields });
+  };
+
+  const getFieldGeoRole = (site: Site, fieldName: string): "zip" | "state" | "county" | null => {
+    if (site.id in geoRoleEdits && fieldName in geoRoleEdits[site.id]) {
+      return geoRoleEdits[site.id][fieldName];
+    }
+    const field = (site.fields as FormField[]).find((f) => f.name === fieldName);
+    return field?.geoRole ?? null;
+  };
 
   return (
     <div className="space-y-6">
@@ -255,6 +322,18 @@ export function SitesTab() {
                       <Button
                         size="icon"
                         variant="ghost"
+                        onClick={() => {
+                          setPreviewSite(site);
+                          setPreviewData({});
+                        }}
+                        title="View Form"
+                        data-testid={`button-view-form-${site.id}`}
+                      >
+                        <Eye className="w-4 h-4 text-primary" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
                         onClick={() => deleteMutation.mutate(site.id)}
                         data-testid={`button-delete-site-${site.id}`}
                       >
@@ -263,37 +342,76 @@ export function SitesTab() {
                     </div>
                   </div>
                   {expandedSite === site.id && (
-                    <div className="mt-4 rounded-md border overflow-x-auto">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead className="w-12">#</TableHead>
-                            <TableHead>Label</TableHead>
-                            <TableHead>Name</TableHead>
-                            <TableHead>Type</TableHead>
-                            <TableHead className="text-center">Required</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {(site.fields as FormField[])?.map((f, i) => (
-                            <TableRow key={i}>
-                              <TableCell className="font-mono text-muted-foreground">{f.order}</TableCell>
-                              <TableCell>{f.label || "-"}</TableCell>
-                              <TableCell className="font-mono text-sm">{f.name}</TableCell>
-                              <TableCell>
-                                <Badge variant="outline" className="font-mono text-xs">{f.type}</Badge>
-                              </TableCell>
-                              <TableCell className="text-center">
-                                {f.required ? (
-                                  <CheckCircle2 className="w-4 h-4 text-emerald-500 mx-auto" />
-                                ) : (
-                                  <XCircle className="w-4 h-4 text-muted-foreground/40 mx-auto" />
-                                )}
-                              </TableCell>
+                    <div className="mt-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-sm font-semibold">Field Geo Roles</p>
+                          <p className="text-xs text-muted-foreground mt-0.5">Assign which field is ZIP (prio 1), State (prio 2), or County (prio 3).</p>
+                        </div>
+                        <Button
+                          size="sm"
+                          onClick={() => handleSaveGeoRoles(site)}
+                          disabled={updateFieldRolesMutation.isPending}
+                        >
+                          {updateFieldRolesMutation.isPending ? <Loader2 className="w-3 h-3 mr-1.5 animate-spin" /> : <Save className="w-3 h-3 mr-1.5" />}
+                          Save Roles
+                        </Button>
+                      </div>
+                      <div className="rounded-md border overflow-x-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="w-10">#</TableHead>
+                              <TableHead>Label</TableHead>
+                              <TableHead>Name</TableHead>
+                              <TableHead>Type</TableHead>
+                              <TableHead className="text-center w-36">Geo Role</TableHead>
+                              <TableHead className="text-center">Required</TableHead>
                             </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
+                          </TableHeader>
+                          <TableBody>
+                            {(site.fields as FormField[])?.map((f, i) => {
+                              const role = getFieldGeoRole(site, f.name);
+                              return (
+                                <TableRow key={i}>
+                                  <TableCell className="font-mono text-muted-foreground">{f.order}</TableCell>
+                                  <TableCell>{f.label || "-"}</TableCell>
+                                  <TableCell className="font-mono text-sm">{f.name}</TableCell>
+                                  <TableCell>
+                                    <Badge variant="outline" className="font-mono text-xs">{f.type}</Badge>
+                                  </TableCell>
+                                  <TableCell className="text-center">
+                                    <Select
+                                      value={role ?? "none"}
+                                      onValueChange={(v) => handleGeoRoleChange(site, f.name, v === "none" ? null : v as "zip" | "state" | "county")}
+                                    >
+                                      <SelectTrigger className={`h-7 text-xs w-28 mx-auto ${role === "zip" ? "border-emerald-500/60 text-emerald-500 bg-emerald-500/5" :
+                                        role === "state" ? "border-amber-500/60 text-amber-500 bg-amber-500/5" :
+                                          role === "county" ? "border-blue-500/60 text-blue-500 bg-blue-500/5" : ""
+                                        }`}>
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="none">— None —</SelectItem>
+                                        <SelectItem value="zip">📍 ZIP</SelectItem>
+                                        <SelectItem value="state">🗺 State</SelectItem>
+                                        <SelectItem value="county">🏢 County</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                  </TableCell>
+                                  <TableCell className="text-center">
+                                    {f.required ? (
+                                      <CheckCircle2 className="w-4 h-4 text-emerald-500 mx-auto" />
+                                    ) : (
+                                      <XCircle className="w-4 h-4 text-muted-foreground/40 mx-auto" />
+                                    )}
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            })}
+                          </TableBody>
+                        </Table>
+                      </div>
                     </div>
                   )}
                 </CardContent>
@@ -302,6 +420,33 @@ export function SitesTab() {
           </div>
         )}
       </div>
+
+      <Dialog open={!!previewSite} onOpenChange={(open) => !open && setPreviewSite(null)}>
+        <DialogContent className="max-w-4xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Monitor className="w-5 h-5 text-primary" />
+              Form Preview: {previewSite?.name}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="py-4">
+            {previewSite && (
+              <div className="rounded-lg border p-6 bg-muted/5">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-tight opacity-70 mb-4">{previewSite.url}</p>
+                <SiteForm
+                  site={previewSite}
+                  formData={previewData}
+                  setFormData={setPreviewData}
+                  isReadOnly={false}
+                />
+              </div>
+            )}
+          </div>
+          <div className="flex justify-end pt-2">
+            <Button variant="secondary" onClick={() => setPreviewSite(null)}>Close Preview</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -530,9 +675,13 @@ export function ProxyTab() {
     proxyUsername: "",
     proxyPassword: "",
     proxyType: "http",
+    proxyStateUsername: "",
+    proxyCountyUsername: "",
     proxySiteIds: null,
   });
   const [urlTemplate, setUrlTemplate] = useState("");
+  const [stateUrlTemplate, setStateUrlTemplate] = useState("");
+  const [countyUrlTemplate, setCountyUrlTemplate] = useState("");
   const [initialized, setInitialized] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; ip?: string; message?: string } | null>(null);
 
@@ -540,16 +689,48 @@ export function ProxyTab() {
     const d = proxyQuery.data;
     setConfig(d);
     setUrlTemplate(buildProxyUrl(d));
+    setStateUrlTemplate(
+      d.proxyStateUsername
+        ? `${d.proxyType || "http"}://${d.proxyStateUsername}:${d.proxyPassword}@${d.proxyHost}:${d.proxyPort}`
+        : ""
+    );
+    setCountyUrlTemplate(
+      d.proxyCountyUsername
+        ? `${d.proxyType || "http"}://${d.proxyCountyUsername}:${d.proxyPassword}@${d.proxyHost}:${d.proxyPort}`
+        : ""
+    );
     setInitialized(true);
   }
 
   const urlValid = urlTemplate === "" ? null : parseProxyUrl(urlTemplate) !== null;
+  const stateUrlValid = stateUrlTemplate === "" ? null : parseProxyUrl(stateUrlTemplate) !== null;
+  const countyUrlValid = countyUrlTemplate === "" ? null : parseProxyUrl(countyUrlTemplate) !== null;
 
   const handleUrlChange = (val: string) => {
     setUrlTemplate(val);
     const parsed = parseProxyUrl(val);
     if (parsed) {
       setConfig((prev) => ({ ...prev, ...parsed }));
+    }
+  };
+
+  const handleStateUrlChange = (val: string) => {
+    setStateUrlTemplate(val);
+    const parsed = parseProxyUrl(val);
+    if (parsed) {
+      setConfig((prev) => ({ ...prev, proxyStateUsername: parsed.proxyUsername || "" }));
+    } else if (val === "") {
+      setConfig((prev) => ({ ...prev, proxyStateUsername: "" }));
+    }
+  };
+
+  const handleCountyUrlChange = (val: string) => {
+    setCountyUrlTemplate(val);
+    const parsed = parseProxyUrl(val);
+    if (parsed) {
+      setConfig((prev) => ({ ...prev, proxyCountyUsername: parsed.proxyUsername || "" }));
+    } else if (val === "") {
+      setConfig((prev) => ({ ...prev, proxyCountyUsername: "" }));
     }
   };
 
@@ -603,10 +784,32 @@ export function ProxyTab() {
     },
   });
 
-  const hasZipPlaceholder = config.proxyUsername.includes("{zip}");
+  const hasZipPlaceholder = (config.proxyUsername ?? "").includes("{zip}");
+  const hasStatePlaceholder = (config.proxyStateUsername ?? "").includes("{state}");
+  const hasCountyPlaceholder = (config.proxyCountyUsername ?? "").includes("{county}");
+
   const zipPreviewUrl = hasZipPlaceholder
     ? buildProxyUrl({ ...config, proxyUsername: config.proxyUsername.replace(/\{zip\}/g, "90210") })
     : buildProxyUrl(config);
+
+  const statePreviewUrl = config.proxyStateUsername
+    ? buildProxyUrl({
+      ...config,
+      proxyUsername: hasStatePlaceholder
+        ? config.proxyStateUsername.replace(/\{state\}/g, "ca")
+        : `${config.proxyStateUsername}-ca`
+    })
+    : "";
+
+  const countyPreviewUrl = config.proxyCountyUsername
+    ? buildProxyUrl({
+      ...config,
+      proxyUsername: hasCountyPlaceholder
+        ? config.proxyCountyUsername.replace(/\{county\}/g, "orange_county")
+        : `${config.proxyCountyUsername}-orange_county`
+    })
+    : "";
+
 
   return (
     <div className="space-y-6">
@@ -622,10 +825,14 @@ export function ProxyTab() {
 
       <Card>
         <CardContent className="p-6 space-y-5">
+          {/* Priority 1: ZIP Proxy */}
           <div className="space-y-2">
-            <Label>Proxy URL Template</Label>
+            <div className="flex items-center gap-2">
+              <div className="w-5 h-5 rounded-full bg-emerald-500 flex items-center justify-center text-white text-[10px] font-bold shrink-0">1</div>
+              <Label className="text-sm font-semibold">ZIP Proxy URL (Priority 1)</Label>
+            </div>
             <Input
-              placeholder="http://user-{zip}:password@host:port"
+              placeholder="http://user-zip-{zip}:password@us.decodo.com:10003"
               value={urlTemplate}
               onChange={(e) => handleUrlChange(e.target.value)}
               className="font-mono text-sm"
@@ -646,8 +853,74 @@ export function ProxyTab() {
               )}
             </div>
             <p className="text-xs text-muted-foreground">
-              Use <code className="bg-muted px-1 rounded text-[11px]">{"{zip}"}</code> in the username — it is replaced with the agent's zip code on every submission.
-              Example: <span className="font-mono text-[11px]">http://user-country-us-zip-{"{zip}"}:password@us.decodo.com:10003</span>
+              Use <code className="bg-muted px-1 rounded text-[11px]">{"{zip}"}</code> in the username — replaced with the agent's ZIP code on every submission.<br />
+              Example: <span className="font-mono text-[11px]">http://user-zip-{"{zip}"}:password@us.decodo.com:10003</span>
+            </p>
+          </div>
+
+          {/* Priority 2: State Proxy */}
+          <div className="space-y-2 pt-1 border-t">
+            <div className="flex items-center gap-2 pt-1">
+              <div className="w-5 h-5 rounded-full bg-amber-500 flex items-center justify-center text-white text-[10px] font-bold shrink-0">2</div>
+              <Label className="text-sm font-semibold">State Proxy URL (Priority 2 — Fallback)</Label>
+            </div>
+            <Input
+              placeholder="http://user-state-{state}:password@us.decodo.com:10003"
+              value={stateUrlTemplate}
+              onChange={(e) => handleStateUrlChange(e.target.value)}
+              className="font-mono text-sm border-amber-500/30 focus-visible:ring-amber-500/50"
+              data-testid="input-proxy-state-url"
+            />
+            <div className="flex items-center gap-1.5 min-h-[18px]">
+              {stateUrlValid === true && (
+                <>
+                  <CheckCircle2 className="w-3.5 h-3.5 text-amber-500" />
+                  <span className="text-xs text-amber-500 font-medium">Valid URL</span>
+                </>
+              )}
+              {stateUrlValid === false && (
+                <>
+                  <XCircle className="w-3.5 h-3.5 text-destructive" />
+                  <span className="text-xs text-destructive">Invalid format — expected: <span className="font-mono">http://user:pass@host:port</span></span>
+                </>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Use <code className="bg-muted px-1 rounded text-[11px]">{"{state}"}</code> in the username — replaced with the agent's state code (e.g. <span className="font-mono">ca</span>) on every submission.<br />
+              Example: <span className="font-mono text-[11px]">http://user-state-{"{state}"}:password@us.decodo.com:10003</span>
+            </p>
+          </div>
+
+          {/* Priority 3: County Proxy */}
+          <div className="space-y-2 pt-1 border-t">
+            <div className="flex items-center gap-2 pt-1">
+              <div className="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center text-white text-[10px] font-bold shrink-0">3</div>
+              <Label className="text-sm font-semibold">County Proxy URL (Priority 3 — Fallback)</Label>
+            </div>
+            <Input
+              placeholder="http://user-county-{county}:password@us.decodo.com:10003"
+              value={countyUrlTemplate}
+              onChange={(e) => handleCountyUrlChange(e.target.value)}
+              className="font-mono text-sm border-blue-500/30 focus-visible:ring-blue-500/50"
+              data-testid="input-proxy-county-url"
+            />
+            <div className="flex items-center gap-1.5 min-h-[18px]">
+              {countyUrlValid === true && (
+                <>
+                  <CheckCircle2 className="w-3.5 h-3.5 text-blue-500" />
+                  <span className="text-xs text-blue-500 font-medium">Valid URL</span>
+                </>
+              )}
+              {countyUrlValid === false && (
+                <>
+                  <XCircle className="w-3.5 h-3.5 text-destructive" />
+                  <span className="text-xs text-destructive">Invalid format — expected: <span className="font-mono">http://user:pass@host:port</span></span>
+                </>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Use <code className="bg-muted px-1 rounded text-[11px]">{"{county}"}</code> in the username — replaced with the agent's county name on every submission.<br />
+              Example: <span className="font-mono text-[11px]">http://user-county-{"{county}"}:password@us.decodo.com:10003</span>
             </p>
           </div>
 
@@ -707,11 +980,10 @@ export function ProxyTab() {
             <button
               type="button"
               onClick={toggleApplyToAll}
-              className={`w-full flex items-center justify-between rounded-md border px-4 py-3 text-sm transition-colors ${
-                applyToAll
-                  ? "border-primary bg-primary/5 text-primary"
-                  : "border-border bg-muted/30 text-muted-foreground hover:border-primary/50"
-              }`}
+              className={`w-full flex items-center justify-between rounded-md border px-4 py-3 text-sm transition-colors ${applyToAll
+                ? "border-primary bg-primary/5 text-primary"
+                : "border-border bg-muted/30 text-muted-foreground hover:border-primary/50"
+                }`}
               data-testid="button-proxy-all-sites"
             >
               <span className="font-medium">All Sites</span>
@@ -730,11 +1002,10 @@ export function ProxyTab() {
                       key={site.id}
                       type="button"
                       onClick={() => { if (applyToAll) toggleApplyToAll(); toggleSite(site.id); }}
-                      className={`w-full flex items-center justify-between rounded-md border px-4 py-2.5 text-sm transition-colors ${
-                        isSelected
-                          ? "border-primary bg-primary/5"
-                          : "border-border bg-background hover:border-primary/50"
-                      }`}
+                      className={`w-full flex items-center justify-between rounded-md border px-4 py-2.5 text-sm transition-colors ${isSelected
+                        ? "border-primary bg-primary/5"
+                        : "border-border bg-background hover:border-primary/50"
+                        }`}
                       data-testid={`button-proxy-site-${site.id}`}
                     >
                       <div className="flex items-center gap-2.5 min-w-0">
@@ -775,40 +1046,176 @@ export function ProxyTab() {
           <CardContent className="p-6 space-y-4">
             <div className="flex items-center gap-2">
               <Shield className="w-4 h-4 text-primary" />
-              <h4 className="text-sm font-semibold">Geo-Targeting Preview</h4>
+              <h4 className="text-sm font-semibold">Geo-Targeting Live Preview</h4>
             </div>
             <p className="text-xs text-muted-foreground">
-              {hasZipPlaceholder
-                ? "The {zip} placeholder in your proxy URL is automatically replaced with the agent's zip code on every submission."
-                : "When agents submit forms, the proxy username is appended with the zip/state from the form for geo-targeted routing."}
+              This is how the proxy URLs will look when agents submit forms with ZIP and State data.
             </p>
-            <div className="space-y-3">
-              <div className="rounded-md bg-muted p-3 space-y-1.5">
-                <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">With zip code (e.g. 90210)</p>
-                <p className="font-mono text-xs text-primary break-all" data-testid="text-geo-zip-preview">
-                  {hasZipPlaceholder
-                    ? zipPreviewUrl
-                    : `${buildProxyUrl({ ...config, proxyUsername: config.proxyUsername + "-zip-90210" })}`}
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+              {/* Priority 1 — ZIP */}
+              <div className="rounded-md border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-1.5">
+                <div className="flex items-center gap-1.5">
+                  <div className="w-4 h-4 rounded-full bg-emerald-500 flex items-center justify-center text-white text-[8px] font-bold">1</div>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-500">ZIP (e.g. 90210)</p>
+                </div>
+                <p className="font-mono text-[10px] text-emerald-600 break-all" data-testid="text-geo-zip-preview">
+                  {zipPreviewUrl || <span className="text-muted-foreground italic">No ZIP Proxy</span>}
                 </p>
               </div>
-              {!hasZipPlaceholder && (
-                <div className="rounded-md bg-muted p-3 space-y-1.5">
-                  <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">With state (e.g. california)</p>
-                  <p className="font-mono text-xs text-primary break-all" data-testid="text-geo-state-preview">
-                    {buildProxyUrl({ ...config, proxyUsername: config.proxyUsername + "-state-california" })}
-                  </p>
+              {/* Priority 2 — State */}
+              <div className="rounded-md border border-amber-500/20 bg-amber-500/5 p-3 space-y-1.5">
+                <div className="flex items-center gap-1.5">
+                  <div className="w-4 h-4 rounded-full bg-amber-500 flex items-center justify-center text-white text-[8px] font-bold">2</div>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-amber-500">State (e.g. CA)</p>
                 </div>
-              )}
-              <div className="rounded-md bg-muted p-3 space-y-1.5">
-                <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">No geo data</p>
-                <p className="font-mono text-xs break-all" data-testid="text-geo-none-preview">
-                  {buildProxyUrl(config)}
+                <p className="font-mono text-[10px] text-amber-600 break-all" data-testid="text-geo-state-preview">
+                  {statePreviewUrl || <span className="text-muted-foreground italic">No State Proxy</span>}
+                </p>
+              </div>
+              {/* Priority 3 — County */}
+              <div className="rounded-md border border-blue-500/20 bg-blue-500/5 p-3 space-y-1.5">
+                <div className="flex items-center gap-1.5">
+                  <div className="w-4 h-4 rounded-full bg-blue-500 flex items-center justify-center text-white text-[8px] font-bold">3</div>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-blue-500">County (e.g. Orange)</p>
+                </div>
+                <p className="font-mono text-[10px] text-blue-600 break-all" data-testid="text-geo-county-preview">
+                  {countyPreviewUrl || <span className="text-muted-foreground italic">No County Proxy</span>}
                 </p>
               </div>
             </div>
+            {!config.proxyStateUsername && !config.proxyCountyUsername && (
+              <p className="text-[11px] text-amber-600/80 bg-amber-500/5 border border-amber-500/20 rounded px-3 py-2">
+                ⚠️ No fallback proxies configured — if ZIP proxy fails, the submission will <strong>fail immediately</strong>.
+              </p>
+            )}
           </CardContent>
         </Card>
       )}
+
+    </div>
+  );
+}
+
+export function SubmissionsTab() {
+  const { user, isLoading: authLoading } = useAuth();
+
+  const isAgent = user?.role === "agent";
+  const isUser = user?.role === "user";
+  const isAdmin = user?.role === "admin";
+
+  const submissionsEndpoint = isAgent ? "/api/agent/submissions" : "/api/submissions";
+  const sitesEndpoint = isAgent ? "/api/agent/sites" : "/api/sites";
+
+  const submissionsQuery = useQuery<any[]>({
+    queryKey: [submissionsEndpoint],
+    queryFn: async () => {
+      const res = await apiRequest("GET", submissionsEndpoint);
+      return res.json();
+    },
+    enabled: !!user && !authLoading && (isAgent || isUser)
+  });
+
+  const sitesQuery = useQuery<Site[]>({
+    queryKey: [sitesEndpoint],
+    queryFn: async () => {
+      const res = await apiRequest("GET", sitesEndpoint);
+      return res.json();
+    },
+    enabled: !!user && !authLoading && (isAgent || isUser)
+  });
+
+  const getSiteName = (id: string) => sitesQuery.data?.find(s => s.id === id)?.name || "Unknown Site";
+
+  if (authLoading) {
+    return <Card><CardContent className="p-8 flex justify-center"><Loader2 className="w-6 h-6 animate-spin" /></CardContent></Card>;
+  }
+
+  if (!user || (!isAgent && !isUser)) {
+    return <Card><CardContent className="p-8 text-center text-muted-foreground">You do not have permission to view submissions.</CardContent></Card>;
+  }
+
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Date</TableHead>
+              <TableHead>Site</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Location</TableHead>
+              <TableHead>Method</TableHead>
+              <TableHead>Results</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {submissionsQuery.isLoading || sitesQuery.isLoading ? (
+              <TableRow><TableCell colSpan={6} className="text-center py-8"><Loader2 className="w-6 h-6 animate-spin mx-auto" /></TableCell></TableRow>
+            ) : (submissionsQuery.isError || sitesQuery.isError) ? (
+              <TableRow>
+                <TableCell colSpan={6} className="text-center py-8 text-destructive">
+                  <div className="flex flex-col items-center gap-2">
+                    <XCircle className="w-6 h-6" />
+                    <p className="font-medium">Failed to load submissions</p>
+                    <p className="text-xs">
+                      Submissions: {(submissionsQuery.error as Error)?.message || "OK"} |
+                      Sites: {(sitesQuery.error as Error)?.message || "OK"}
+                    </p>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ) : submissionsQuery.data?.length === 0 ? (
+              <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No submissions found</TableCell></TableRow>
+            ) : (
+              submissionsQuery.data?.map((sub) => (
+                <TableRow key={sub.id}>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {new Date(sub.createdAt).toLocaleString()}
+                  </TableCell>
+                  <TableCell className="font-medium">{getSiteName(sub.siteId)}</TableCell>
+                  <TableCell>
+                    <Badge variant={sub.status === "success" ? "default" : sub.status === "failed" ? "destructive" : "outline"}>
+                      {sub.status}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {sub.proxyLocation || "-"}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline" className="text-[10px] uppercase">
+                      {sub.proxyMethod}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="max-w-[200px]">
+                    <div className="space-y-1">
+                      {sub.extractedData && Object.entries(sub.extractedData as Record<string, string>).map(([k, v]) => (
+                        <div key={k} className="text-[10px] bg-primary/5 p-1 rounded border border-primary/10 truncate" title={`${k}: ${v}`}>
+                          <span className="font-bold opacity-70">{k}:</span> {v}
+                        </div>
+                      ))}
+                      {!sub.extractedData || Object.keys(sub.extractedData).length === 0 ? (
+                        <span className="text-xs text-muted-foreground italic">No extra data</span>
+                      ) : null}
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function SubmissionsPage() {
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Form Submissions</h1>
+        <p className="text-muted-foreground text-sm mt-1">View results and data captured from automated form fillings</p>
+      </div>
+      <SubmissionsTab />
     </div>
   );
 }

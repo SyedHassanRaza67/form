@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Shield, LayoutDashboard, LogOut, PanelLeftClose, PanelLeft } from "lucide-react";
+import { Shield, LayoutDashboard, LogOut, PanelLeftClose, PanelLeft, Info } from "lucide-react";
 import { Users } from "lucide-react";
 import { Globe } from "lucide-react";
 import { Network } from "lucide-react";
@@ -42,6 +42,8 @@ export function AppSidebar() {
     { title: "Dashboard", url: "/", icon: LayoutDashboard },
     { title: "Sites", url: "/sites", icon: Globe },
     { title: "Proxy", url: "/proxy", icon: Network },
+    { title: "Submissions", url: "/submissions", icon: FileText },
+    { title: "Instructions", url: "/instructions", icon: Info },
   ];
 
   const agentItems = [

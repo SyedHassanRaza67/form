@@ -8,7 +8,8 @@ import type { FormField } from "@shared/schema";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import axios from "axios";
-import { autoFillForm, type AutoFillProgress, type ProxyConfig as BrowserProxyConfig } from "./browser";
+import { autoFillForm, extractTrustedFormData, type AutoFillProgress, type ProxyConfig as BrowserProxyConfig } from "./browser";
+import { getWorkingProxy } from "./proxy-tester";
 
 const sseClients = new Map<string, import("express").Response[]>();
 
@@ -21,11 +22,11 @@ function sendSSE(submissionId: string, data: AutoFillProgress) {
   const clients = sseClients.get(submissionId) || [];
   const msg = `data: ${JSON.stringify(data)}\n\n`;
   clients.forEach((c) => {
-    try { c.write(msg); } catch {}
+    try { c.write(msg); } catch { }
   });
   if (data.step === "complete" || data.step === "error") {
     clients.forEach((c) => {
-      try { c.end(); } catch {}
+      try { c.end(); } catch { }
     });
     sseClients.delete(submissionId);
   }
@@ -55,13 +56,57 @@ function lookupStateCode(stateValue: string): string | null {
   return US_STATE_CODES[normalized] ?? null;
 }
 
-function extractStateValue(formData: Record<string, string>): string | null {
-  for (const key of Object.keys(formData)) {
-    if (matchesStateField(key) && formData[key]?.trim()) {
-      return formData[key].trim();
+// Consolidated geo extraction
+function extractGeoTargets(formData: Record<string, string>, fields?: import("@shared/schema").FormField[]): { zip: string | null; state: string | null; county: string | null } {
+  let zip: string | null = null;
+  let state: string | null = null;
+  let county: string | null = null;
+
+  // 1. Explicit geoRole assignment wins
+  if (fields && fields.length > 0) {
+    const zipField = fields.find((f) => f.geoRole === "zip");
+    if (zipField && formData[zipField.name]?.trim()) {
+      zip = formData[zipField.name].trim();
+    }
+    const stateField = fields.find((f) => f.geoRole === "state");
+    if (stateField && formData[stateField.name]?.trim()) {
+      state = formData[stateField.name].trim();
+    }
+    const countyField = fields.find((f) => f.geoRole === "county");
+    if (countyField && formData[countyField.name]?.trim()) {
+      county = formData[countyField.name].trim();
     }
   }
-  return null;
+
+  // 2. Fallback: name-based heuristics (only if not already found via roles)
+  if (!zip) {
+    for (const key of Object.keys(formData)) {
+      if (matchesZipField(key) && formData[key]?.trim()) {
+        zip = formData[key].trim();
+        break;
+      }
+    }
+  }
+
+  if (!state) {
+    for (const key of Object.keys(formData)) {
+      if (matchesStateField(key) && formData[key]?.trim()) {
+        state = formData[key].trim();
+        break;
+      }
+    }
+  }
+
+  if (!county) {
+    for (const key of Object.keys(formData)) {
+      if (matchesCountyField(key) && formData[key]?.trim()) {
+        county = formData[key].trim();
+        break;
+      }
+    }
+  }
+
+  return { zip, state, county };
 }
 
 function buildStateFallbackUsername(baseUsername: string, stateCode: string): string {
@@ -73,52 +118,39 @@ function buildStateFallbackUsername(baseUsername: string, stateCode: string): st
   }
   return `${baseUsername}-state-${stateCode}`;
 }
-// Keywords that a field name must start with (before a separator) to count as a zip/state field
 const ZIP_KEYWORDS = ["zip", "postal"];
 const STATE_KEYWORDS = ["state"];
+const COUNTY_KEYWORDS = ["county", "parish", "borough"];
 
 function matchesZipField(key: string): boolean {
   const k = key.toLowerCase();
   if (ZIP_FIELD_NAMES.includes(k)) return true;
-  return ZIP_KEYWORDS.some(
-    (kw) => k === kw || k.startsWith(kw + "-") || k.startsWith(kw + "_") || k.startsWith(kw + " ")
-  );
+  // Match prefix: zip_code, postal_address, etc.
+  if (ZIP_KEYWORDS.some((kw) => k === kw || k.startsWith(kw + "-") || k.startsWith(kw + "_") || k.startsWith(kw + " "))) return true;
+  // Match suffix / middle: billing_zip, address_zip_code, address_postal, etc.
+  return ZIP_KEYWORDS.some((kw) => k.includes("_" + kw) || k.includes("-" + kw) || k.includes(" " + kw));
 }
 
 function matchesStateField(key: string): boolean {
   const k = key.toLowerCase();
   if (STATE_FIELD_NAMES.includes(k)) return true;
-  return STATE_KEYWORDS.some(
-    (kw) => k === kw || k.startsWith(kw + "-") || k.startsWith(kw + "_") || k.startsWith(kw + " ")
-  );
+  // Match prefix: state_code, state_name, etc.
+  if (STATE_KEYWORDS.some((kw) => k === kw || k.startsWith(kw + "-") || k.startsWith(kw + "_") || k.startsWith(kw + " "))) return true;
+  // Match suffix / middle: billing_state, shipping_state, etc.
+  return STATE_KEYWORDS.some((kw) => k.includes("_" + kw) || k.includes("-" + kw) || k.includes(" " + kw));
 }
 
-function extractGeoTarget(formData: Record<string, string>): { type: "zip" | "state" | null; value: string } {
-  // Zip has first priority
-  for (const key of Object.keys(formData)) {
-    if (matchesZipField(key) && formData[key]?.trim()) {
-      return { type: "zip", value: formData[key].trim() };
-    }
-  }
-  // State is second priority
-  for (const key of Object.keys(formData)) {
-    if (matchesStateField(key) && formData[key]?.trim()) {
-      return { type: "state", value: formData[key].trim().toLowerCase().replace(/\s+/g, "_") };
-    }
-  }
-  return { type: null, value: "" };
+function matchesCountyField(key: string): boolean {
+  const k = key.toLowerCase();
+  // Stringent check to avoid phone numbers (e.g. 5057017913) being picked up
+  if (COUNTY_KEYWORDS.some((kw) => k === kw || k.startsWith(kw + "_") || k.startsWith(kw + "-") || k.startsWith(kw + " "))) return true;
+  if (COUNTY_KEYWORDS.some((kw) => k.endsWith("_" + kw) || k.endsWith("-" + kw) || k.endsWith(" " + kw))) return true;
+  return false;
 }
 
-function buildGeoProxyUsername(baseUsername: string, geo: { type: "zip" | "state" | null; value: string }): string {
-  if (baseUsername.includes("{zip}")) {
-    if (geo.type === "zip" && geo.value) {
-      return baseUsername.replace(/\{zip\}/g, geo.value);
-    }
-    return baseUsername;
-  }
-  if (!geo.type) return baseUsername;
-  return `${baseUsername}-${geo.type}-${geo.value}`;
-}
+
+
+
 
 export async function registerRoutes(
   httpServer: Server,
@@ -337,6 +369,25 @@ export async function registerRoutes(
     }
   });
 
+  app.put("/api/sites/:id", authMiddleware, requireRole("user"), async (req, res) => {
+    try {
+      const site = await storage.getSite(req.params.id);
+      if (!site) return res.status(404).json({ message: "Site not found" });
+      if (site.ownerId !== req.user!.userId) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+      const { fields } = req.body;
+      if (!Array.isArray(fields)) {
+        return res.status(400).json({ message: "fields array required" });
+      }
+
+      const updated = await storage.updateSite(req.params.id, { fields });
+      return res.json(updated);
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
   app.post("/api/agents", authMiddleware, requireRole("user"), async (req, res) => {
     try {
       const parsed = createAgentSchema.safeParse(req.body);
@@ -381,6 +432,23 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/submissions", authMiddleware, requireRole("user"), async (req, res) => {
+    try {
+      const agents = await storage.getAgentsByParent(req.user!.userId);
+      const agentIds = agents.map(a => a.id);
+
+      const allSubs = [];
+      for (const agentId of agentIds) {
+        const subs = await storage.getSubmissionsByAgent(agentId);
+        allSubs.push(...subs);
+      }
+
+      return res.json(allSubs.sort((a, b) => new Date(b.createdAt!).getTime() - new Date(a.createdAt!).getTime()));
+    } catch (error: any) {
+      return res.status(500).json({ message: error.message });
+    }
+  });
+
   app.delete("/api/agents/:id", authMiddleware, requireRole("user"), async (req, res) => {
     try {
       const agent = await storage.getUser(req.params.id);
@@ -397,6 +465,7 @@ export async function registerRoutes(
   app.put("/api/proxy", authMiddleware, requireRole("user"), async (req, res) => {
     try {
       const bodySchema = proxyConfigSchema.extend({
+        proxyStateUsername: z.string().optional(),
         proxySiteIds: z.array(z.string()).nullable().optional(),
       });
       const parsed = bodySchema.safeParse(req.body);
@@ -410,6 +479,7 @@ export async function registerRoutes(
         proxyUsername: parsed.data.proxyUsername,
         proxyPassword: parsed.data.proxyPassword,
         proxyType: parsed.data.proxyType,
+        proxyStateUsername: parsed.data.proxyStateUsername ?? null,
         proxySiteIds: parsed.data.proxySiteIds !== undefined ? parsed.data.proxySiteIds : null,
       });
 
@@ -439,6 +509,7 @@ export async function registerRoutes(
         proxyUsername: user.proxyUsername || "",
         proxyPassword: user.proxyPassword || "",
         proxyType: user.proxyType || "http",
+        proxyStateUsername: user.proxyStateUsername || "",
         proxySiteIds,
       });
     } catch (error: any) {
@@ -453,7 +524,10 @@ export async function registerRoutes(
         return res.status(400).json({ success: false, message: "No proxy configured. Save your proxy settings first." });
       }
 
-      const testUsername = (user.proxyUsername || "").replace(/\{zip\}/g, "90210");
+      // Substitute a test zip/state into the template for testing
+      const testUsername = (user.proxyUsername || "")
+        .replace(/\{zip\}/g, "90210")
+        .replace(/\{state\}/g, "ca");
       const response = await axios.get("https://api.ipify.org?format=json", {
         proxy: {
           host: normalizeProxyHost(user.proxyHost),
@@ -539,15 +613,13 @@ export async function registerRoutes(
       let proxyHost: string | null = null;
       let proxyPort: number | null = null;
       let proxyLocation: string | null = null;
-      let geoUsername: string | null = null;
+      let proxyMethod: string | null = "none";
       let browserProxy: BrowserProxyConfig | null = null;
-      let fallbackBrowserProxy: BrowserProxyConfig | null = null;
+      let proxyConfigured = false;
 
       if (agent.parentUserId) {
         const parentUser = await storage.getUser(agent.parentUserId);
         if (parentUser && parentUser.proxyHost && parentUser.proxyPort && parentUser.proxyUsername && parentUser.proxyPassword) {
-          // Check proxy site assignment: null = all sites, array = specific sites
-          // If all stored site IDs are stale (sites deleted/recreated), treat as "apply to all"
           let effectiveSiteIds = parentUser.proxySiteIds;
           if (Array.isArray(parentUser.proxySiteIds) && parentUser.proxySiteIds.length > 0) {
             const parentSites = await storage.getSitesByOwner(agent.parentUserId);
@@ -561,40 +633,106 @@ export async function registerRoutes(
             (Array.isArray(effectiveSiteIds) && effectiveSiteIds.includes(siteId));
 
           if (proxyAppliesToSite) {
-            const geo = extractGeoTarget(formData);
-            geoUsername = buildGeoProxyUsername(parentUser.proxyUsername, geo);
-            proxyHost = normalizeProxyHost(parentUser.proxyHost);
-            proxyPort = parentUser.proxyPort;
-            proxyLocation = geo.type ? `${geo.type}-${geo.value}` : null;
-            browserProxy = {
-              host: normalizeProxyHost(parentUser.proxyHost),
-              port: parentUser.proxyPort,
-              username: geoUsername,
-              password: parentUser.proxyPassword,
-              protocol: parentUser.proxyType || "http",
-              label: proxyLocation ?? undefined,
-            };
+            proxyConfigured = true;
 
-            // Build state-based fallback proxy (used if zip proxy tunnel fails)
-            if (geo.type === "zip") {
-              const rawState = extractStateValue(formData);
-              const stateCode = rawState ? lookupStateCode(rawState) : null;
-              if (stateCode) {
-                const stateUsername = buildStateFallbackUsername(parentUser.proxyUsername, stateCode);
-                fallbackBrowserProxy = {
-                  host: browserProxy.host,
-                  port: browserProxy.port,
-                  username: stateUsername,
+            // Extract ZIP and state from the form data submitted by the agent
+            const { zip: zipValue, state: stateCode, county: countyValue } = extractGeoTargets(formData, (site.fields || []) as FormField[]);
+            const zipUsernameTemplate = parentUser.proxyUsername; // e.g. user-zip-{zip}
+            const stateUsernameTemplate = parentUser.proxyStateUsername || null; // e.g. user-state-{state}
+            const countyUsernameTemplate = parentUser.proxyCountyUsername || null; // e.g. user-county-{county}
+
+            console.log(`[submission] [${siteId}] Geo extracted — zip: ${zipValue}, state: ${stateCode}, county: ${countyValue}`);
+
+            let workingResult;
+            try {
+              workingResult = await getWorkingProxy(
+                zipValue,
+                stateCode,
+                countyValue,
+                {
+                  host: normalizeProxyHost(parentUser.proxyHost),
+                  port: parentUser.proxyPort,
                   password: parentUser.proxyPassword,
-                  protocol: parentUser.proxyType || "http",
-                  label: `state-${stateCode}`,
-                };
-              }
+                  type: parentUser.proxyType || "http"
+                },
+                zipUsernameTemplate,
+                stateUsernameTemplate,
+                countyUsernameTemplate
+              );
+            } catch (proxyError: any) {
+              console.error(`[submission] [${siteId}] Proxy resolution failed:`, proxyError.message);
+              return res.status(400).json({ message: proxyError.message });
             }
+
+            browserProxy = workingResult.primary;
+            const fallbackProxy = workingResult.fallback;
+            proxyMethod = workingResult.method;
+            proxyHost = browserProxy.host;
+            proxyPort = browserProxy.port;
+            proxyLocation = browserProxy.label || null;
+
+            console.log(`[submission] Proxy resolved — method: ${proxyMethod}, primary: ${browserProxy.username}, fallback: ${fallbackProxy?.username || "none"}, location: ${proxyLocation}`);
+
+            const fields = (site.fields || []) as FormField[];
+            const submission = await storage.createSubmission({
+              agentId: req.user!.userId,
+              siteId,
+              formData,
+              proxyHost,
+              proxyPort,
+              proxyLocation,
+              proxyMethod: proxyMethod,
+              status: "running",
+            });
+
+            console.log(`[submission] [${submission.id}] Initiating auto-fill for ${site.url} via proxy...`);
+            autoFillForm(
+              site.url,
+              fields,
+              formData,
+              site.submitSelector,
+              browserProxy,
+              (progress) => {
+                if (progress.step === "error") console.error(`[submission] [${submission.id}] Error: ${progress.detail}`);
+                sendSSE(submission.id, progress);
+              },
+              fallbackProxy
+            ).then(async (result) => {
+              console.log(`[submission] [${submission.id}] Complete — success: ${result.success}`);
+              await storage.updateSubmission(submission.id, {
+                status: result.success ? "success" : "failed",
+                duration: result.duration,
+                errorMessage: result.errorMessage,
+                extractedData: result.extractedData,
+              });
+              // Independently extract TrustedForm / Journaya URLs in a separate browser session
+              extractTrustedFormData(site.url, browserProxy).then(async (tfData) => {
+                if (Object.keys(tfData).length > 0) {
+                  const existing = await storage.getSubmission(submission.id);
+                  const merged = { ...(existing?.extractedData as Record<string, string> || {}), ...tfData };
+                  await storage.updateSubmission(submission.id, { extractedData: merged });
+                  console.log(`[trusted-form] [${submission.id}] Saved TrustedForm data:`, tfData);
+                }
+              }).catch(() => { /* non-fatal */ });
+            }).catch(async (err) => {
+              console.error(`[submission] [${submission.id}] Fatal Error:`, err.message);
+              await storage.updateSubmission(submission.id, {
+                status: "failed",
+                errorMessage: err.message,
+              });
+              sendSSE(submission.id, { step: "error", detail: err.message, percent: 100, timestamp: Date.now() });
+            });
+
+            return res.json({
+              ...submission,
+              geoUsername: browserProxy?.username,
+            });
           }
         }
       }
 
+      // 2. Regular submission (no proxy or proxy not applicable to this site)
+      const fields = (site.fields || []) as FormField[];
       const submission = await storage.createSubmission({
         agentId: req.user!.userId,
         siteId,
@@ -602,31 +740,33 @@ export async function registerRoutes(
         proxyHost,
         proxyPort,
         proxyLocation,
+        proxyMethod: proxyMethod,
         status: "running",
       });
-
-      res.json({
-        ...submission,
-        geoUsername,
-      });
-
-      const fields = (site.fields || []) as FormField[];
 
       autoFillForm(
         site.url,
         fields,
         formData,
         site.submitSelector,
-        browserProxy,
-        (progress) => sendSSE(submission.id, progress),
-        fallbackBrowserProxy
+        null,
+        (progress) => sendSSE(submission.id, progress)
       ).then(async (result) => {
         await storage.updateSubmission(submission.id, {
           status: result.success ? "success" : "failed",
-          screenshot: result.screenshot,
           duration: result.duration,
           errorMessage: result.errorMessage,
+          extractedData: result.extractedData,
         });
+        // Independently extract TrustedForm / Journaya URLs in a separate browser session
+        extractTrustedFormData(site.url, null).then(async (tfData) => {
+          if (Object.keys(tfData).length > 0) {
+            const existing = await storage.getSubmission(submission.id);
+            const merged = { ...(existing?.extractedData as Record<string, string> || {}), ...tfData };
+            await storage.updateSubmission(submission.id, { extractedData: merged });
+            console.log(`[trusted-form] [${submission.id}] Saved TrustedForm data:`, tfData);
+          }
+        }).catch(() => { /* non-fatal */ });
       }).catch(async (err) => {
         await storage.updateSubmission(submission.id, {
           status: "failed",
@@ -634,6 +774,8 @@ export async function registerRoutes(
         });
         sendSSE(submission.id, { step: "error", detail: err.message, percent: 100, timestamp: Date.now() });
       });
+
+      return res.json(submission);
     } catch (error: any) {
       return res.status(500).json({ message: error.message });
     }

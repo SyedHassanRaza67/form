@@ -16,6 +16,8 @@ export const users = pgTable("users", {
   proxyUsername: text("proxy_username"),
   proxyPassword: text("proxy_password"),
   proxyType: text("proxy_type").default("http"),
+  proxyStateUsername: text("proxy_state_username"),
+  proxyCountyUsername: text("proxy_county_username"),
   proxySiteIds: jsonb("proxy_site_ids").$type<string[] | null>().default(null),
   lastActive: timestamp("last_active").defaultNow(),
   createdAt: timestamp("created_at").defaultNow(),
@@ -29,6 +31,7 @@ export const formFieldSchema = z.object({
   options: z.array(z.string()).optional(),
   required: z.boolean(),
   order: z.number(),
+  geoRole: z.enum(["zip", "state", "county"]).nullable().optional(),
 });
 
 export type FormField = z.infer<typeof formFieldSchema>;
@@ -60,10 +63,12 @@ export const submissions = pgTable("submissions", {
   proxyHost: text("proxy_host"),
   proxyPort: integer("proxy_port"),
   proxyLocation: text("proxy_location"),
+  proxyMethod: text("proxy_method"),
   status: text("status").notNull().default("pending"),
   screenshot: text("screenshot"),
   duration: integer("duration"),
   errorMessage: text("error_message"),
+  extractedData: jsonb("extracted_data").$type<Record<string, string>>().default({}),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

@@ -38,12 +38,12 @@ export async function scrapeFormFields(url: string): Promise<ScrapeResult> {
 
 const VISIBLE_INPUTS = "input:not([type='hidden']):not([type='submit']):not([type='button']):not([type='reset']):not([type='image']):not([type='file']), select, textarea";
 
-function countVisibleInputs($: cheerio.CheerioAPI, el: cheerio.Cheerio<cheerio.Element>): number {
+function countVisibleInputs($: cheerio.CheerioAPI, el: cheerio.Cheerio<any>): number {
   return el.find(VISIBLE_INPUTS).length;
 }
 
 function findBestFormScope($: cheerio.CheerioAPI): {
-  scope: cheerio.Cheerio<cheerio.Element>;
+  scope: cheerio.Cheerio<any>;
   formSelector: string | null;
 } {
   const forms = $("form");
@@ -68,7 +68,7 @@ function findBestFormScope($: cheerio.CheerioAPI): {
   }
 
   // Fallback: scan for the div/section/article container with the most inputs
-  const containers: Array<{ el: cheerio.Cheerio<cheerio.Element>; count: number }> = [];
+  const containers: Array<{ el: cheerio.Cheerio<any>; count: number }> = [];
   $("div, section, article, main, aside").each((_i, el) => {
     const $el = $(el);
     const count = countVisibleInputs($, $el);
@@ -94,7 +94,7 @@ function findBestFormScope($: cheerio.CheerioAPI): {
 
 // ─── Field extraction ─────────────────────────────────────────────────────────
 
-function extractFields($: cheerio.CheerioAPI, scope: cheerio.Cheerio<cheerio.Element>): FormField[] {
+function extractFields($: cheerio.CheerioAPI, scope: cheerio.Cheerio<any>): FormField[] {
   const fields: FormField[] = [];
   let order = 1;
   const seenNames = new Map<string, number>();
@@ -104,13 +104,19 @@ function extractFields($: cheerio.CheerioAPI, scope: cheerio.Cheerio<cheerio.Ele
     const $el = $(el);
     const tag = ($el.prop("tagName")?.toLowerCase() || "input");
     const rawType = ($el.attr("type") || tag).toLowerCase();
+    const rawName = ($el.attr("name") || $el.attr("id") || "").toLowerCase();
 
-    if (["hidden", "submit", "button", "reset", "image", "file"].includes(rawType)) return;
+    // Specific hidden fields we WANT to keep (Certificates)
+    const isCertField = rawName.includes("trustedform") ||
+      rawName.includes("journ") ||
+      rawName.includes("cert_url");
+
+    if (rawType === "hidden" && !isCertField) return;
+    if (["submit", "button", "reset", "image", "file"].includes(rawType)) return;
 
     // Radio buttons handled separately as groups below
     if (rawType === "radio") return;
 
-    const rawName = $el.attr("name") || $el.attr("id") || "";
     if (!rawName) return;
 
     if (rawType === "checkbox") {
@@ -209,7 +215,7 @@ function extractFields($: cheerio.CheerioAPI, scope: cheerio.Cheerio<cheerio.Ele
     }
   });
 
-  for (const [name, group] of radioGroups) {
+  for (const [name, group] of Array.from(radioGroups.entries())) {
     fields.push({
       label: group.groupLabel,
       name,
@@ -226,7 +232,7 @@ function extractFields($: cheerio.CheerioAPI, scope: cheerio.Cheerio<cheerio.Ele
 
 // ─── Label detection ──────────────────────────────────────────────────────────
 
-function getLabel($: cheerio.CheerioAPI, $el: cheerio.Cheerio<cheerio.Element>): string {
+function getLabel($: cheerio.CheerioAPI, $el: cheerio.Cheerio<any>): string {
   // 1. Explicit <label for="id">
   const id = $el.attr("id");
   if (id) {
@@ -283,7 +289,7 @@ function getLabel($: cheerio.CheerioAPI, $el: cheerio.Cheerio<cheerio.Element>):
   return "";
 }
 
-function getRadioGroupLabel($: cheerio.CheerioAPI, $firstRadio: cheerio.Cheerio<cheerio.Element>, name: string): string {
+function getRadioGroupLabel($: cheerio.CheerioAPI, $firstRadio: cheerio.Cheerio<any>, name: string): string {
   // Check fieldset > legend
   const fieldset = $firstRadio.closest("fieldset");
   if (fieldset.length) {
@@ -325,7 +331,7 @@ function cssEscape(value: string): string {
   return value.replace(/([^\w-])/g, "\\$1");
 }
 
-function buildSelector($: cheerio.CheerioAPI, $el: cheerio.Cheerio<cheerio.Element>): string {
+function buildSelector($: cheerio.CheerioAPI, $el: cheerio.Cheerio<any>): string {
   const id = $el.attr("id");
   if (id) return `#${cssEscape(id)}`;
 
@@ -339,7 +345,7 @@ function buildSelector($: cheerio.CheerioAPI, $el: cheerio.Cheerio<cheerio.Eleme
   return tag;
 }
 
-function getUniqueSelector($: cheerio.CheerioAPI, $el: cheerio.Cheerio<cheerio.Element>): string {
+function getUniqueSelector($: cheerio.CheerioAPI, $el: cheerio.Cheerio<any>): string {
   const id = $el.attr("id");
   if (id) return `#${id}`;
 

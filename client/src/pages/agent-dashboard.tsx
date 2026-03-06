@@ -14,15 +14,19 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import {
-  Globe, Star, Send, Loader2, MapPin, Shield,
-  Monitor, CheckCircle2, XCircle, Eye, EyeOff
+  Globe, Star, Send, Loader2, MapPin, Shield, History,
+  Monitor, CheckCircle2, XCircle, Eye, EyeOff, CheckCircle, RefreshCcw
 } from "lucide-react";
 import type { FormField, Site } from "@shared/schema";
+import { SiteForm } from "@/components/site-form";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 const ZIP_KEYWORDS = ["zip", "postal"];
 const STATE_KEYWORDS = ["state"];
+const COUNTY_KEYWORDS = ["county"];
 const ZIP_EXACT = ["zip", "zipcode", "zip_code", "postal", "postalcode", "postal_code"];
 const STATE_EXACT = ["state", "state_name"];
+const COUNTY_EXACT = ["county", "county_name"];
 
 interface AutoFillProgress {
   step: string;
@@ -37,13 +41,17 @@ export default function AgentDashboard() {
   const [expandedSiteId, setExpandedSiteId] = useState<string | null>(null);
   const [formData, setFormData] = useState<Record<string, string>>({});
   const [activeSubmissionId, setActiveSubmissionId] = useState<string | null>(null);
+  const [activeProxyMethod, setActiveProxyMethod] = useState<string | null>(null);
+  const [activeProxyLocation, setActiveProxyLocation] = useState<string | null>(null);
   const [progressUpdates, setProgressUpdates] = useState<AutoFillProgress[]>([]);
   const [currentProgress, setCurrentProgress] = useState<AutoFillProgress | null>(null);
   const [showProgressDialog, setShowProgressDialog] = useState(false);
+  const [lastSuccessSiteId, setLastSuccessSiteId] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const progressContainerRef = useRef<HTMLDivElement>(null);
 
   const sitesQuery = useQuery<Site[]>({ queryKey: ["/api/agent/sites"] });
+  const submissionsQuery = useQuery<any[]>({ queryKey: ["/api/agent/submissions"] });
   const connectSSE = useCallback((submissionId: string) => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
@@ -66,12 +74,14 @@ export default function AgentDashboard() {
           queryClient.invalidateQueries({ queryKey: ["/api/agent/submissions"] });
 
           if (progress.step === "complete") {
+            setLastSuccessSiteId(submissionId); // We use submissionId to identify the last success for the specific site
+            setExpandedSiteId(null); // Close the dropdown on success as requested
             toast({ title: "Auto-fill complete", description: progress.detail });
           } else {
             toast({ title: "Auto-fill failed", description: progress.detail, variant: "destructive" });
           }
         }
-      } catch {}
+      } catch { }
     };
 
     es.onerror = () => {
@@ -105,18 +115,35 @@ export default function AgentDashboard() {
       });
       return res.json();
     },
+    onMutate: () => {
+      // Instant UI feedback as requested
+      setShowProgressDialog(true);
+      setProgressUpdates([{
+        step: "starting",
+        detail: "Initializing submission...",
+        percent: 1,
+        timestamp: Date.now()
+      }]);
+    },
     onSuccess: (data: any) => {
       setActiveSubmissionId(data.id);
-      setProgressUpdates([]);
+      setActiveProxyMethod(data.proxyMethod);
+      setActiveProxyLocation(data.proxyLocation);
+      // We don't reset updates here anymore as they might have already started
       setCurrentProgress(null);
-      setShowProgressDialog(true);
       connectSSE(data.id);
 
       const locationMsg = data.proxyLocation ? ` via ${data.proxyLocation}` : "";
       toast({ title: `Submission started${locationMsg}` });
     },
     onError: (err: any) => {
-      setShowProgressDialog(false);
+      // If there's an immediate error (e.g. 400), show it in the progress list
+      setProgressUpdates((prev) => [...prev, {
+        step: "error",
+        detail: `Submission failed: ${err.message}`,
+        percent: 100,
+        timestamp: Date.now()
+      }]);
       toast({ title: "Submission failed", description: err.message, variant: "destructive" });
     },
   });
@@ -131,46 +158,103 @@ export default function AgentDashboard() {
   const isDone =
     currentProgress?.step === "complete" || currentProgress?.step === "error";
 
-  const isZipField = (name: string) => {
-    const k = name.toLowerCase();
-    return ZIP_EXACT.includes(k) || ZIP_KEYWORDS.some((kw) => k === kw || k.startsWith(kw + "-") || k.startsWith(kw + "_"));
-  };
-  const isStateField = (name: string) => {
-    const k = name.toLowerCase();
-    return STATE_EXACT.includes(k) || STATE_KEYWORDS.some((kw) => k === kw || k.startsWith(kw + "-") || k.startsWith(kw + "_"));
-  };
-  const isGeoField = (name: string) => isZipField(name) || isStateField(name);
-
   const expandedFields = expandedSite ? ((expandedSite.fields as FormField[]) || []) : [];
 
+  const isZipField = (name: string) => {
+    const field = expandedFields.find(f => f.name === name);
+    if (field?.geoRole === "zip") return true;
+    const k = name.toLowerCase();
+    if (ZIP_EXACT.includes(k)) return true;
+    if (ZIP_KEYWORDS.some((kw) => k === kw || k.startsWith(kw + "-") || k.startsWith(kw + "_"))) return true;
+    return ZIP_KEYWORDS.some((kw) => k.includes("_" + kw) || k.includes("-" + kw));
+  };
+  const isStateField = (name: string) => {
+    const field = expandedFields.find(f => f.name === name);
+    if (field?.geoRole === "state") return true;
+    const k = name.toLowerCase();
+    if (STATE_EXACT.includes(k)) return true;
+    if (STATE_KEYWORDS.some((kw) => k === kw || k.startsWith(kw + "-") || k.startsWith(kw + "_"))) return true;
+    return STATE_KEYWORDS.some((kw) => k.includes("_" + kw) || k.includes("-" + kw));
+  };
+  const isCountyField = (name: string) => {
+    const field = expandedFields.find(f => f.name === name);
+    if (field?.geoRole === "county") return true;
+    const k = name.toLowerCase();
+    if (COUNTY_EXACT.includes(k)) return true;
+    if (COUNTY_KEYWORDS.some((kw) => k === kw || k.startsWith(kw + "-") || k.startsWith(kw + "_"))) return true;
+    return COUNTY_KEYWORDS.some((kw) => k.includes("_" + kw) || k.includes("-" + kw));
+  };
+  const isGeoField = (name: string) => isZipField(name) || isStateField(name) || isCountyField(name);
+
   const geoPreview = useMemo(() => {
+    let zip = null;
+    let state = null;
+    let county = null;
     for (const key of Object.keys(formData)) {
       if (isZipField(key) && formData[key]?.trim()) {
-        return { type: "zip" as const, value: formData[key].trim(), field: key };
+        zip = { type: "zip" as const, value: formData[key].trim(), field: key };
+        break;
       }
     }
     for (const key of Object.keys(formData)) {
       if (isStateField(key) && formData[key]?.trim()) {
-        return { type: "state" as const, value: formData[key].trim().toLowerCase().replace(/\s+/g, "_"), field: key };
+        state = { type: "state" as const, value: formData[key].trim(), field: key };
+        break;
       }
     }
-    return null;
-  }, [formData]);
+    for (const key of Object.keys(formData)) {
+      if (isCountyField(key) && formData[key]?.trim()) {
+        county = { type: "county" as const, value: formData[key].trim().toLowerCase().replace(/\s+/g, "_"), field: key };
+        break;
+      }
+    }
+    return { zip, state, county };
+  }, [formData, expandedFields]);
+
+  const lastSuccessfulSub = useMemo(() => {
+    if (!expandedSiteId) return null;
+    const subs = submissionsQuery.data || [];
+    return subs
+      .filter(s => s.siteId === expandedSiteId && s.status === "success")
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+  }, [expandedSiteId, submissionsQuery.data]);
+
+  const handleAutofillLast = () => {
+    if (lastSuccessfulSub?.formData) {
+      setFormData(lastSuccessfulSub.formData as Record<string, string>);
+      toast({ title: "Form Autofilled", description: "Loaded data from your last successful submission." });
+    }
+  };
 
   const handleToggleSite = (siteId: string) => {
     if (expandedSiteId === siteId) {
       setExpandedSiteId(null);
       setFormData({});
+      setLastSuccessSiteId(null);
     } else {
       setExpandedSiteId(siteId);
       setFormData({});
+      setLastSuccessSiteId(null);
+    }
+  };
+
+  const handleCloseForm = () => {
+    if (!isBusy) {
+      setExpandedSiteId(null);
+      setFormData({});
+      setLastSuccessSiteId(null);
     }
   };
 
   const handleCloseProgress = () => {
+    // User requested to fix close icon - allow closure even if busy
+    setShowProgressDialog(false);
+
+    // Only reset the background state if it's finished, otherwise keep it for background tracking
     if (!isBusy) {
-      setShowProgressDialog(false);
       setActiveSubmissionId(null);
+      setActiveProxyMethod(null);
+      setActiveProxyLocation(null);
       setProgressUpdates([]);
       setCurrentProgress(null);
     }
@@ -217,186 +301,133 @@ export default function AgentDashboard() {
         <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Assigned Sites</h3>
         {sites.map((site) => {
           const siteFields = (site.fields as FormField[]) || [];
-          const isExpanded = expandedSiteId === site.id;
-
           return (
-            <Card key={site.id} data-testid={`card-site-${site.id}`}>
+            <Card key={site.id} data-testid={`card-site-${site.id}`} className="group hover:border-primary/30 transition-all duration-300">
               <CardContent className="p-0">
                 <button
-                  className="w-full p-4 flex items-center justify-between gap-3 text-left hover:bg-muted/50 transition-colors rounded-t-lg"
+                  className="w-full p-4 flex items-center justify-between gap-3 text-left hover:bg-muted/30 transition-colors rounded-lg"
                   onClick={() => handleToggleSite(site.id)}
                   data-testid={`button-toggle-site-${site.id}`}
                 >
                   <div className="flex items-center gap-3 min-w-0">
-                    <Globe className="w-5 h-5 text-primary shrink-0" />
+                    <div className="w-10 h-10 rounded-full bg-primary/5 flex items-center justify-center shrink-0">
+                      <Globe className="w-5 h-5 text-primary" />
+                    </div>
                     <div className="min-w-0">
-                      <p className="font-medium truncate">{site.name}</p>
-                      <p className="text-xs text-muted-foreground truncate">{siteFields.length} fields</p>
+                      <p className="font-semibold truncate">{site.name}</p>
+                      <p className="text-xs text-muted-foreground truncate opacity-70">{siteFields.length} fields • {site.url}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <Badge variant="outline" className="text-xs">
-                      {isExpanded ? <EyeOff className="w-3 h-3 mr-1" /> : <Eye className="w-3 h-3 mr-1" />}
-                      {isExpanded ? "Close" : "View Form"}
+                    <Badge variant="outline" className="text-xs group-hover:bg-primary/5 transition-colors">
+                      <Eye className="w-3 h-3 mr-1" />
+                      View Form
                     </Badge>
                   </div>
                 </button>
-
-                {isExpanded && (
-                  <div className="border-t px-4 pb-4 pt-4 space-y-3 bg-muted/5">
-                    <p className="text-[10px] text-muted-foreground uppercase tracking-tight opacity-70 mb-1">{site.url}</p>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-3 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
-                      {siteFields
-                        .sort((a, b) => a.order - b.order)
-                        .map((field) => (
-                          <div key={field.name} className="space-y-1">
-                            <div className="flex items-center gap-2">
-                              <Label className="text-[11px] font-medium">
-                                {field.label || field.name}
-                                {field.required && <span className="text-destructive ml-0.5">*</span>}
-                              </Label>
-                              {isZipField(field.name) && (
-                                <Badge variant="default" className="h-4 text-[9px] px-1 gap-0.5" data-testid={`badge-geo-${field.name}`}>
-                                  <Star className="w-2.5 h-2.5" />
-                                  PROXY
-                                </Badge>
-                              )}
-                              {isStateField(field.name) && (
-                                <Badge variant="secondary" className="h-4 text-[9px] px-1 gap-0.5" data-testid={`badge-geo-${field.name}`}>
-                                  <MapPin className="w-2.5 h-2.5" />
-                                  GEO
-                                </Badge>
-                              )}
-                            </div>
-
-                            {field.type === "checkbox" ? (
-                              <div className="flex items-center gap-2 py-1">
-                                <Checkbox
-                                  className="h-3.5 w-3.5"
-                                  checked={formData[field.name] === (field.options?.[0] || "true")}
-                                  onCheckedChange={(checked) =>
-                                    setFormData({
-                                      ...formData,
-                                      [field.name]: checked ? (field.options?.[0] || "true") : "",
-                                    })
-                                  }
-                                  data-testid={`checkbox-field-${field.name}`}
-                                />
-                                <span className="text-[11px] text-muted-foreground">{field.label || field.name}</span>
-                              </div>
-                            ) : field.type === "radio" && field.options ? (
-                              <div className="flex flex-wrap gap-x-3 gap-y-1 py-1">
-                                {field.options.map((opt) => (
-                                  <label key={opt} className="flex items-center gap-1.5 cursor-pointer">
-                                    <input
-                                      type="radio"
-                                      name={field.name}
-                                      value={opt}
-                                      checked={formData[field.name] === opt}
-                                      onChange={(e) => setFormData({ ...formData, [field.name]: e.target.value })}
-                                      className="h-3 w-3 accent-primary"
-                                      data-testid={`radio-field-${field.name}-${opt}`}
-                                    />
-                                    <span className="text-[11px]">{opt}</span>
-                                  </label>
-                                ))}
-                              </div>
-                            ) : field.type === "select" && field.options ? (
-                              <Select
-                                value={formData[field.name] || ""}
-                                onValueChange={(v) => setFormData({ ...formData, [field.name]: v })}
-                              >
-                                <SelectTrigger className="h-8 text-[11px]" data-testid={`select-field-${field.name}`}>
-                                  <SelectValue placeholder={`Select ${field.label || field.name}`} />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {field.options.map((opt) => (
-                                    <SelectItem className="text-[11px]" key={opt} value={opt}>{opt}</SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            ) : field.type === "textarea" ? (
-                              <textarea
-                                className="flex min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-1.5 text-[11px] ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                                placeholder={field.label || field.name}
-                                value={formData[field.name] || ""}
-                                onChange={(e) => setFormData({ ...formData, [field.name]: e.target.value })}
-                                data-testid={`textarea-field-${field.name}`}
-                              />
-                            ) : (
-                              <Input
-                                className="h-8 text-[11px]"
-                                type={field.type === "email" ? "email" : field.type === "tel" ? "tel" : "text"}
-                                placeholder={field.label || field.name}
-                                value={formData[field.name] || ""}
-                                onChange={(e) => setFormData({ ...formData, [field.name]: e.target.value })}
-                                data-testid={`input-field-${field.name}`}
-                              />
-                            )}
-                          </div>
-                        ))}
-                    </div>
-
-                    {siteFields.some((f) => isGeoField(f.name)) && (
-                      <div className="rounded border border-primary/20 bg-primary/5 p-2 space-y-1" data-testid="proxy-preview-card">
-                        <div className="flex items-center gap-2">
-                          <Shield className="w-3 h-3 text-primary" />
-                          <p className="text-[9px] font-bold uppercase tracking-widest text-primary">Geo-Targeting Preview</p>
-                        </div>
-                        {geoPreview ? (
-                          <div className="space-y-0.5">
-                            <div className="flex items-center justify-between gap-4">
-                              <p className="font-mono text-[11px] text-primary truncate" data-testid="text-proxy-preview">
-                                [proxy-user]-{geoPreview.type}-{geoPreview.value}
-                              </p>
-                              <p className="text-[10px] text-muted-foreground whitespace-nowrap">
-                                via <span className="font-mono">{geoPreview.field}</span>
-                              </p>
-                            </div>
-                            <p className="text-[9px] text-emerald-500 font-semibold uppercase tracking-wider">
-                              ✓ Geo-targeting active — {geoPreview.type === "zip" ? "zip" : "state"} will route proxy IP
-                            </p>
-                          </div>
-                        ) : (
-                          <p className="text-[10px] text-muted-foreground italic">
-                            Enter a zip or state to activate geo-targeting
-                          </p>
-                        )}
-                      </div>
-                    )}
-
-                    <Button
-                      className="w-full h-9 text-xs font-semibold"
-                      onClick={() => submitMutation.mutate()}
-                      disabled={submitMutation.isPending || isBusy}
-                      data-testid="button-submit-form"
-                    >
-                      {submitMutation.isPending ? (
-                        <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />
-                      ) : (
-                        <Send className="w-3.5 h-3.5 mr-2" />
-                      )}
-                      Submit & Auto-Fill
-                    </Button>
-                  </div>
-                )}
               </CardContent>
             </Card>
           );
         })}
       </div>
 
+      {/* Site Form Modal with Backdrop Blur */}
+      <Dialog open={!!expandedSiteId} onOpenChange={handleCloseForm}>
+        <DialogContent className="max-w-2xl backdrop-blur-md bg-background/95" data-testid="dialog-site-form">
+          <DialogHeader>
+            <div className="flex items-center gap-3">
+              <Globe className="w-5 h-5 text-primary" />
+              <DialogTitle className="flex flex-col">
+                <span>{expandedSite?.name}</span>
+                <span className="text-[10px] text-muted-foreground font-normal uppercase tracking-tight opacity-70">
+                  {expandedSite?.url}
+                </span>
+              </DialogTitle>
+            </div>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-4">
+            <div className="flex items-center justify-between gap-4">
+              {lastSuccessfulSub && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-[10px] gap-1.5 border-emerald-500/30 text-emerald-600 hover:bg-emerald-50"
+                  onClick={handleAutofillLast}
+                  disabled={isBusy}
+                >
+                  <RefreshCcw className="w-3 h-3" />
+                  Fill with Last Successful Data
+                </Button>
+              )}
+              {lastSuccessSiteId && (
+                <Alert className="bg-emerald-500/10 border-emerald-500/20 text-emerald-600 py-2 flex-1">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle className="h-3 w-3 text-emerald-500" />
+                    <AlertTitle className="text-[10px] font-bold uppercase tracking-wider mb-0">Success</AlertTitle>
+                  </div>
+                </Alert>
+              )}
+            </div>
+
+            <div className="max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
+              {expandedSite && (
+                <SiteForm
+                  site={expandedSite}
+                  formData={formData}
+                  setFormData={setFormData}
+                  isReadOnly={isBusy}
+                />
+              )}
+            </div>
+
+            <Button
+              className="w-full h-10 font-bold tracking-tight shadow-lg shadow-primary/20"
+              onClick={() => submitMutation.mutate()}
+              disabled={submitMutation.isPending || isBusy}
+              data-testid="button-submit-form"
+            >
+              {submitMutation.isPending ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Send className="w-4 h-4 mr-2" />
+              )}
+              Submit & Auto-Fill
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Auto-fill progress dialog */}
       <Dialog open={showProgressDialog} onOpenChange={handleCloseProgress}>
         <DialogContent className="max-w-lg" data-testid="dialog-autofill-progress">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Monitor className="w-5 h-5" />
-              Auto-Fill Progress
-              {isBusy && <Loader2 className="w-4 h-4 animate-spin text-primary" />}
-              {currentProgress?.step === "complete" && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
-              {currentProgress?.step === "error" && <XCircle className="w-4 h-4 text-destructive" />}
+            <DialogTitle className="flex items-center justify-between gap-2 overflow-hidden">
+              <div className="flex items-center gap-2 truncate">
+                <Monitor className="w-5 h-5 shrink-0" />
+                <span className="truncate">Auto-Fill Progress</span>
+                {isBusy && <Loader2 className="w-4 h-4 animate-spin text-primary shrink-0" />}
+                {currentProgress?.step === "complete" && <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />}
+                {currentProgress?.step === "error" && <XCircle className="w-4 h-4 text-destructive shrink-0" />}
+              </div>
+
+              {activeProxyMethod && activeProxyMethod !== 'none' && (
+                <Badge
+                  variant="outline"
+                  className={`ml-auto text-[10px] shrink-0 gap-1 px-1.5 py-0 ${activeProxyMethod === 'zip'
+                    ? 'text-emerald-500 border-emerald-500/30 bg-emerald-500/5'
+                    : activeProxyMethod === 'state'
+                      ? 'text-amber-500 border-amber-500/30 bg-amber-500/5'
+                      : 'text-blue-500 border-blue-500/30 bg-blue-500/5'
+                    }`}
+                >
+                  {activeProxyMethod === 'zip'
+                    ? `Zip()`
+                    : activeProxyMethod === 'state'
+                      ? `State()`
+                      : `County()`}
+                </Badge>
+              )}
             </DialogTitle>
           </DialogHeader>
 
@@ -429,10 +460,10 @@ export default function AgentDashboard() {
                       p.step === "error"
                         ? "text-destructive"
                         : p.step === "field_warning" || p.step === "submit_warning"
-                        ? "text-amber-400"
-                        : p.step === "complete"
-                        ? "text-emerald-500"
-                        : "text-foreground"
+                          ? "text-amber-400"
+                          : p.step === "complete"
+                            ? "text-emerald-500"
+                            : "text-foreground"
                     }>
                       {p.step === "field_warning" ? "⚠ " : ""}{p.detail}
                     </span>
@@ -466,6 +497,6 @@ export default function AgentDashboard() {
         </DialogContent>
       </Dialog>
 
-    </div>
+    </div >
   );
 }

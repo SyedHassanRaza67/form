@@ -4,13 +4,12 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { existsSync } from "fs";
 import { execSync } from "child_process";
-import puppeteer from "puppeteer";
-
 // Ensure Chrome is installed before starting — it gets wiped on container restarts
 // Skip this on Vercel as it handles things differently or won't support it this way anyway
 if (!process.env.VERCEL) {
   try {
-    const chromePath = puppeteer.executablePath();
+    const puppeteer = await import("puppeteer");
+    const chromePath = puppeteer.default.executablePath();
     if (!existsSync(chromePath)) {
       console.log("[startup] Chrome not found, installing via puppeteer...");
       execSync("node node_modules/puppeteer/install.mjs", { stdio: "inherit" });

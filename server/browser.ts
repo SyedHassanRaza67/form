@@ -1,9 +1,4 @@
-import puppeteerExtra from "puppeteer-extra";
-import StealthPlugin from "puppeteer-extra-plugin-stealth";
-import puppeteer from "puppeteer";
 import type { FormField } from "@shared/schema";
-
-puppeteerExtra.use(StealthPlugin());
 
 export interface ProxyConfig {
   host: string;
@@ -211,6 +206,13 @@ export async function autoFillForm(
 
   try {
     onProgress({ step: "launching", detail: "Launching", percent: 5, timestamp: Date.now() });
+
+    // Dynamic imports to save cold-start time and memory on Vercel
+    const { default: puppeteerExtra } = await import("puppeteer-extra");
+    const { default: StealthPlugin } = await import("puppeteer-extra-plugin-stealth");
+    const { default: puppeteer } = await import("puppeteer"); // Assuming puppeteer is also needed
+
+    puppeteerExtra.use(StealthPlugin());
 
     const launchArgs = [
       "--no-sandbox",
